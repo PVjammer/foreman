@@ -1,0 +1,88 @@
+# --- foreman (begin) ---
+# Managed by `foreman setup-herdr`: re-running it keeps your toast delivery choice.
+# Keys come from [keys] in ~/.config/foreman/config.toml. foreman's herdr plugin (hooks
+# that start and wake watchers) is linked separately: `herdr plugin list`.
+
+# Inbox popup: worker events you can answer without switching sessions.
+[[keys.command]]
+key = "{{.Keys.Inbox}}"
+type = "popup"
+command = "{{.Exe}} --active inbox"
+width = "85%"
+height = "80%"
+
+# Jump to the next workstream that needs you.
+[[keys.command]]
+key = "{{.Keys.Next}}"
+type = "shell"
+command = "{{.Exe}} --active next"
+
+# Switch to the orchestrator pane; press again to go back where you were.
+[[keys.command]]
+key = "{{.Keys.Orchestrator}}"
+type = "shell"
+command = "{{.Exe}} --active orch"
+
+# Floating windows onto live sessions. Close any of them with ctrl+b q; the session keeps
+# running in its own tab.
+[[keys.command]]
+key = "{{.Keys.OrchFloat}}"
+type = "popup"
+command = "{{.Exe}} --active view orchestrator"
+width = "85%"
+height = "85%"
+
+[[keys.command]]
+key = "{{.Keys.Scratch}}"
+type = "popup"
+command = "{{.Exe}} --active view scratch"
+width = "80%"
+height = "75%"
+
+[[keys.command]]
+key = "{{.Keys.ScratchClear}}"
+type = "shell"
+command = "{{.Exe}} --active scratch clear"
+
+[[keys.command]]
+key = "{{.Keys.Terminal}}"
+type = "popup"
+command = "{{.Exe}} --active view term"
+width = "85%"
+height = "75%"
+
+# Dock a session beside the orchestrator (pick one; picking a docked one undocks it).
+[[keys.command]]
+key = "{{.Keys.Dock}}"
+type = "popup"
+command = "{{.Exe}} --active dock"
+width = "50%"
+height = "50%"
+
+# Ask the orchestrator for a new workstream (ctrl+d in the box starts it directly).
+[[keys.command]]
+key = "{{.Keys.New}}"
+type = "popup"
+command = "{{.Exe}} --active request"
+width = "70%"
+height = "45%"
+{{- if .Agents}}
+
+# Agents: project, workstream name, then the local model's one-line summary.
+[ui.sidebar.agents]
+rows = [["state_icon", "workspace", "$ws"], ["$summary"]]
+{{- end}}
+{{- if .Spaces}}
+
+# Spaces (= projects): pending inbox count next to the name.
+[ui.sidebar.spaces]
+rows = [["state_icon", "workspace", "$inbox"], ["branch", "git_status"]]
+{{- end}}
+{{- if .Toast}}
+
+# foreman's toasts carry summaries. "herdr" shows them in-app; "terminal" or "system"
+# sends desktop notifications instead.
+[ui.toast]
+delivery = "{{.Delivery}}"
+{{- end}}
+# --- foreman (end) ---

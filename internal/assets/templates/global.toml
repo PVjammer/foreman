@@ -1,0 +1,61 @@
+# foreman global config: defaults for every project. A project's .foreman/config.toml
+# overrides any of these, and a workstream's type or --profile flag overrides that.
+
+[herdr]
+# One shared herdr session; each project is a space in it. "default" is the session plain
+# `herdr` opens, so reopening herdr brings your projects back.
+session = "default"
+
+[orchestrator]
+profile = "claude"
+
+[workers]
+profile = "claude"   # default worker; the orchestrator picks others per task
+type = "feature"     # default workstream type (`foreman types`)
+
+# Profiles: a harness plus args, and a note telling the orchestrator when to use it.
+# Built-in claude/pi/opencode profiles exist; redefine them here or add your own.
+#
+# [profiles.pi-small]
+# harness = "pi"
+# args = ["--model", "qwen3.8-27b"]
+# use_for = "small, well-scoped tasks: lookups, mechanical edits, running tests"
+#
+# [profiles.claude-opus]
+# harness = "claude"
+# args = ["--model", "opus"]
+# use_for = "hard design or debugging work"
+
+[keys]
+# herdr keybindings, written by `foreman setup-herdr` (re-run it after changing these).
+# herdr already uses prefix + ? b c e g h j k l n o p q r s v w x z (and more with shift).
+inbox = "prefix+i"               # popup: worker events
+next = "prefix+shift+i"          # jump to the workstream that most needs you
+orchestrator = "prefix+m"        # switch to the orchestrator; again: back
+orchestrator_float = "prefix+shift+m"
+scratch = "prefix+a"             # popup: quick questions with project context
+scratch_clear = "prefix+shift+a"
+terminal = "prefix+t"            # popup: persistent shell at the project root
+dock = "prefix+d"                # dock a session beside the orchestrator
+new = "prefix+f"                 # popup: ask the orchestrator for a workstream
+
+[scratch]
+profile = "claude"
+
+[ui]
+mode = "inbox"       # notifier | inbox | relay
+layout = "tabs"      # tabs: a tab per workstream; panes: zoomed panes in one tab (best for a few)
+stop_on_exit = true  # quitting `foreman up` stops herdr (every project); reopening resumes
+
+[summarizer]
+model = "gemma4:latest"
+url = "http://localhost:11434"
+
+[docs]
+dir = "foreman-docs"
+mode = "commit"      # commit | local | external (asked at `foreman init`)
+
+[hygiene]
+stale_days = 3       # suggest closing out workstreams open longer than this
+max_turns = 40       # ...or with more turns than this
+max_open = 8         # warn when more workstreams than this are open
