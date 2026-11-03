@@ -22,10 +22,48 @@ import (
 const Dir = ".foreman"
 
 // Profile is a named way to run an agent. UseFor tells the orchestrator when to pick it.
+//
+// Wrapper, when set, is a sandbox launcher the harness runs under: foreman runs
+// `<wrapper...> <harness> <args...>` in the worker's pane instead of letting herdr start the
+// harness, then waits for herdr to detect the harness inside it. WrapperCheck is a command
+// run the same way (`<wrapper...> <check...>`) by `foreman doctor`; it must exit 0 only when
+// the sandbox is active. See docs/harness-wrapper.md.
 type Profile struct {
-	Harness string   `toml:"harness"`
-	Args    []string `toml:"args,omitempty"`
-	UseFor  string   `toml:"use_for,omitempty"`
+	Harness      string   `toml:"harness"`
+	Args         []string `toml:"args,omitempty"`
+	UseFor       string   `toml:"use_for,omitempty"`
+	Wrapper      []string `toml:"wrapper,omitempty"`
+	WrapperCheck []string `toml:"wrapper_check,omitempty"`
+}
+
+// Wrapped reports whether the profile runs its harness inside a wrapper.
+func (p Profile) Wrapped() bool { return len(p.Wrapper) > 0 }
+
+// Validate rejects wrapper settings foreman can't run safely.
+func (p Profile) Validate() error {
+	if !p.Wrapped() {
+		if len(p.WrapperCheck) > 0 {
+			return errors.New("wrapper_check is set but wrapper isn't")
+		}
+		return nil
+	}
+	if strings.TrimSpace(p.Wrapper[0]) == "" {
+		return errors.New("wrapper's first element must be the wrapper command")
+	}
+	return nil
+}
+
+// CheckCommand is what doctor runs inside the wrapper to prove the sandbox is active: the
+// profile's own wrapper_check, or a known check for agentbox (its session marker). nil means
+// the wrapper declares no check.
+func (p Profile) CheckCommand() []string {
+	if len(p.WrapperCheck) > 0 {
+		return p.WrapperCheck
+	}
+	if p.Wrapped() && filepath.Base(p.Wrapper[0]) == "agentbox" {
+		return []string{"test", "-e", "/run/agentbox/session"}
+	}
+	return nil
 }
 
 type Config struct {

@@ -137,6 +137,9 @@ func EnsureScratch(p *project.Project, h *herdr.Client, sp *space.Space) (herdr.
 		}
 	}
 	_, pr := p.Config.Resolve(p.Config.Scratch.Profile)
+	if pr.Wrapped() {
+		return pn, fmt.Errorf("scratch profile %s has a wrapper; wrappers are for workers only", p.Config.Scratch.Profile)
+	}
 	time.Sleep(300 * time.Millisecond) // let a fresh tab's shell reach its prompt
 	if err := h.StartAgent(space.AgentName(p, Scratch), pr.Harness, pn.PaneID, pr.Args); err != nil &&
 		!strings.Contains(err.Error(), "agent_not_ready") && !strings.Contains(err.Error(), "agent_blocked") {

@@ -80,6 +80,11 @@ harness = "pi"
 args = ["--model", "qwen3.8-27b"]
 use_for = "small, well-scoped tasks: lookups, mechanical edits, running tests"
 
+[profiles.pi-boxed]         # a worker inside a sandbox wrapper: see docs/harness-wrapper.md
+harness = "pi"
+wrapper = ["agentbox"]      # runs `agentbox pi …`; fails closed, never falls back to bare pi
+use_for = "work on security-sensitive repos"
+
 [keys]                      # herdr keybindings (prefix = ctrl+b); re-run setup-herdr after changes
 inbox = "prefix+i"
 next = "prefix+shift+i"

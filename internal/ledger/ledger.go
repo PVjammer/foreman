@@ -26,11 +26,14 @@ type Worktree struct {
 
 // Meta is the workstream's identity and setup. Owner: CLI.
 type Meta struct {
-	Name        string     `json:"name"`
-	Kind        string     `json:"kind"` // the workstream type: feature, bug, research, ...
-	Profile     string     `json:"profile,omitempty"`
-	Harness     string     `json:"harness"`
-	Args        []string   `json:"args,omitempty"`
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"` // the workstream type: feature, bug, research, ...
+	Profile string   `json:"profile,omitempty"`
+	Harness string   `json:"harness"`
+	Args    []string `json:"args,omitempty"`
+	// Wrapper is the sandbox launcher the harness runs under (from the profile); empty means
+	// herdr starts the harness directly.
+	Wrapper     []string   `json:"wrapper,omitempty"`
 	Goal        string     `json:"goal"`
 	Ticket      string     `json:"ticket,omitempty"`
 	Repos       []string   `json:"repos,omitempty"`
@@ -46,6 +49,10 @@ type Meta struct {
 	Created  time.Time  `json:"created"`
 	ClosedAt *time.Time `json:"closed_at,omitempty"`
 }
+
+// Wrapped reports whether the worker runs inside a wrapper. Such a worker must never be
+// started, or resumed, as the bare harness.
+func (m *Meta) Wrapped() bool { return len(m.Wrapper) > 0 }
 
 // Status is the live state as last observed. Owner: watcher.
 type Status struct {

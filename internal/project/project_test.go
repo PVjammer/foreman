@@ -140,3 +140,48 @@ func TestExcludeAppendsOnce(t *testing.T) {
 		t.Errorf("exclude = %q", b)
 	}
 }
+
+func TestWrappedProfileParsing(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	root := t.TempDir()
+	write(t, filepath.Join(root, Dir, "config.toml"), `
+[profiles.pi-boxed]
+harness = "pi"
+args = ["--model", "qwen"]
+wrapper = ["agentbox", "--level", "1"]
+use_for = "security code"
+[profiles.custom]
+harness = "claude"
+wrapper = ["/opt/box"]
+wrapper_check = ["sh", "-c", "test -n \"$IN_BOX\""]
+`)
+	p, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pr := p.Config.Resolve("pi-boxed")
+	if !pr.Wrapped() || strings.Join(pr.Wrapper, " ") != "agentbox --level 1" || strings.Join(pr.Args, " ") != "--model qwen" {
+		t.Fatalf("pi-boxed: %+v", pr)
+	}
+	if got := strings.Join(pr.CheckCommand(), " "); got != "test -e /run/agentbox/session" {
+		t.Errorf("agentbox default check: %q", got)
+	}
+	_, cu := p.Config.Resolve("custom")
+	if got := cu.CheckCommand(); len(got) != 3 || got[0] != "sh" {
+		t.Errorf("declared check: %q", got)
+	}
+	// Built-in profiles stay unwrapped, exactly as before.
+	if _, pi := p.Config.Resolve("pi"); pi.Wrapped() || pi.CheckCommand() != nil || pi.Validate() != nil {
+		t.Errorf("built-in pi changed: %+v", pi)
+	}
+	if err := (Profile{Harness: "pi", Wrapper: []string{""}}).Validate(); err == nil {
+		t.Error("empty wrapper command should be rejected")
+	}
+	if err := (Profile{Harness: "pi", WrapperCheck: []string{"true"}}).Validate(); err == nil {
+		t.Error("wrapper_check without wrapper should be rejected")
+	}
+	if (Profile{Wrapper: []string{"/usr/local/bin/other"}}).CheckCommand() != nil {
+		t.Error("an unknown wrapper declares no check")
+	}
+}

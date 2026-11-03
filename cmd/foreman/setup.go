@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -270,7 +272,11 @@ func profilesCmd() *cobra.Command {
 				if n == orch {
 					mark += " (orchestrator)"
 				}
-				fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\n", n, mark, pr.Harness, strings.Join(pr.Args, " "), pr.UseFor)
+				use := pr.UseFor
+				if pr.Wrapped() {
+					use = strings.TrimSpace(use + " [wrapped: " + strings.Join(pr.Wrapper, " ") + "]")
+				}
+				fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\n", n, mark, pr.Harness, strings.Join(pr.Args, " "), use)
 			}
 			tw.Flush()
 			fmt.Println("\nedit profiles in", project.GlobalConfigPath(), "(or [profiles.<name>] in .foreman/config.toml)")
@@ -547,6 +553,18 @@ func doctorCmd() *cobra.Command {
 					fmt.Printf("  (profile %s: %s not on PATH)\n", n, cfg.Profiles[n].Harness)
 				}
 			}
+			for _, n := range cfg.ProfileNames() {
+				if pr := cfg.Profiles[n]; pr.Wrapped() || len(pr.WrapperCheck) > 0 {
+					for _, r := range checkWrapper(n, pr, p.Root) {
+						ok(r.good, r.msg)
+					}
+				}
+			}
+			for label, prof := range map[string]string{"orchestrator": orchProf, "scratch": cfg.Scratch.Profile} {
+				if _, pr := cfg.Resolve(prof); pr.Wrapped() || (label == "orchestrator" && orch.Wrapped()) {
+					ok(false, fmt.Sprintf("%s profile %s has a wrapper; wrappers are for workers only, so it won't start", label, prof))
+				}
+			}
 			if cfg.SummarizerEnabled() {
 				resp, err := http.Get(strings.TrimRight(cfg.Summarizer.URL, "/") + "/api/tags")
 				good := false
@@ -584,6 +602,49 @@ func doctorCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+type checkResult struct {
+	good bool
+	msg  string
+}
+
+// wrapperCheckTimeout bounds doctor's test launch of a wrapper.
+var wrapperCheckTimeout = 60 * time.Second
+
+// checkWrapper verifies a wrapped profile: the wrapper is on PATH, and a test launch of its
+// check command (`<wrapper...> <check...>`, run in dir) exits 0, proving the sandbox is active.
+func checkWrapper(name string, pr project.Profile, dir string) []checkResult {
+	label := fmt.Sprintf("profile %s: wrapper %s", name, strings.Join(pr.Wrapper, " "))
+	if err := pr.Validate(); err != nil {
+		return []checkResult{{false, fmt.Sprintf("profile %s: %v", name, err)}}
+	}
+	bin, err := exec.LookPath(pr.Wrapper[0])
+	if err != nil {
+		return []checkResult{{false, label + " not on PATH (workers with this profile fail to start)"}}
+	}
+	out := []checkResult{{true, label + " on PATH (" + bin + ")"}}
+	check := pr.CheckCommand()
+	if len(check) == 0 {
+		return append(out, checkResult{false, fmt.Sprintf("profile %s: the wrapper declares no check, so doctor can't tell the sandbox is active (set wrapper_check)", name)})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wrapperCheckTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, append(append([]string{}, pr.Wrapper[1:]...), check...)...)
+	cmd.Dir = dir
+	b, err := cmd.CombinedOutput()
+	msg := fmt.Sprintf("profile %s: sandbox active (`%s` inside the wrapper)", name, strings.Join(check, " "))
+	if err != nil {
+		detail := strings.TrimSpace(string(b))
+		if len(detail) > 300 {
+			detail = detail[len(detail)-300:]
+		}
+		msg = fmt.Sprintf("profile %s: test launch `%s %s` failed (%v)", name, strings.Join(pr.Wrapper, " "), strings.Join(check, " "), err)
+		if detail != "" {
+			msg += ":\n    " + strings.ReplaceAll(detail, "\n", "\n    ")
+		}
+	}
+	return append(out, checkResult{err == nil, msg})
 }
 
 // taken lists herdr 0.9.5's default prefix bindings, so doctor can flag clashes.

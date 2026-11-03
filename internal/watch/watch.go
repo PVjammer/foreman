@@ -625,7 +625,9 @@ func (w *Watcher) bootstrap(ctx context.Context) {
 	} else {
 		w.Log.Printf("bootstrap: starting a fresh orchestrator")
 		_, pr := cfg.OrchestratorProfile()
-		if err := w.H.StartAgent(orchName, pr.Harness, pane, pr.Args); err != nil {
+		if pr.Wrapped() {
+			w.Log.Printf("start orchestrator: its profile has a wrapper; wrappers are for workers only, so it isn't started")
+		} else if err := w.H.StartAgent(orchName, pr.Harness, pane, pr.Args); err != nil {
 			w.Log.Printf("start orchestrator: %v", err)
 		} else {
 			w.promptOrHold(pane, "[foreman → orchestrator] Read .foreman/ORCHESTRATOR.md and follow it. Then run `foreman digest --since 24h`, give me a 3-line picture of where things stand, and wait for instructions."+docsNote)
@@ -643,7 +645,12 @@ func (w *Watcher) bootstrap(ctx context.Context) {
 			continue // created while we were waiting above; `ws new` is starting it
 		}
 		// Alive means its own agent is in its own pane, not merely "some agent is there".
-		if p, err := sp.WorkerPane(m); err == nil && live[p] {
+		if p, err := sp.WorkerPane(m); err == nil && live[p] && m.Wrapped() {
+			// A wrapped worker never resumes natively: herdr's resume runs the bare harness.
+			// Close whatever came back and restart it through its wrapper.
+			w.Log.Printf("bootstrap: %s is wrapped but an agent came back in its pane; closing it and restarting through the wrapper", m.Name)
+			_ = w.H.ClosePane(p)
+		} else if err == nil && live[p] {
 			// Native resume restores the conversation, not an interrupted turn.
 			if st := w.L.Status(m.Name); st.AgentStatus == "working" || st.AgentStatus == "blocked" {
 				w.Log.Printf("bootstrap: %s resumed natively mid-task; nudging it", m.Name)

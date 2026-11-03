@@ -1,0 +1,27 @@
+#!/bin/sh
+# A stand-in sandbox wrapper for scenario runs (scripts/wrapper-scenario.sh).
+#
+#   dummy-wrapper [--fail N] [--setsid] [--] COMMAND [ARGS...]
+#
+# Logs its environment to $FOREMAN_WS_DIR/wrapper-env.log (or $DUMMY_WRAPPER_LOG), marks the
+# "sandbox" with DUMMY_BOX=1, then execs COMMAND. --fail N exits N without running anything;
+# --setsid runs COMMAND in a new session, like bwrap --new-session, which hides it from
+# herdr's detection.
+fail= sess=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --fail) fail=$2; shift 2 ;;
+    --setsid) sess=1; shift ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+log=${DUMMY_WRAPPER_LOG:-${FOREMAN_WS_DIR:+$FOREMAN_WS_DIR/wrapper-env.log}}
+[ -n "$log" ] && env | sort > "$log"
+if [ -n "$fail" ]; then
+  echo "dummy-wrapper: failing with status $fail" >&2
+  exit "$fail"
+fi
+export DUMMY_BOX=1
+if [ -n "$sess" ]; then exec setsid -w "$@"; fi
+exec "$@"

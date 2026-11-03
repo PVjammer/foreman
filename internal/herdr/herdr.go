@@ -236,6 +236,41 @@ func (c *Client) StartAgent(name, kind, pane string, args []string) error {
 	return c.call(nil, a...)
 }
 
+// ProcessInfo is what runs in a pane's terminal: its shell and the foreground process group.
+type ProcessInfo struct {
+	ShellPID       int `json:"shell_pid"`
+	ForegroundPGID int `json:"foreground_process_group_id"`
+	Foreground     []struct {
+		Name string   `json:"name"`
+		Argv []string `json:"argv"`
+		PID  int      `json:"pid"`
+	} `json:"foreground_processes"`
+}
+
+// AtPrompt reports whether the pane's shell is in the foreground, i.e. nothing else is running.
+func (pi ProcessInfo) AtPrompt() bool {
+	return pi.ShellPID != 0 && (pi.ForegroundPGID == 0 || pi.ForegroundPGID == pi.ShellPID)
+}
+
+func (c *Client) ProcessInfo(pane string) (ProcessInfo, error) {
+	var r struct {
+		Info ProcessInfo `json:"process_info"`
+	}
+	err := c.call(&r, "pane", "process-info", "--pane", pane)
+	return r.Info, err
+}
+
+// PaneKeys sends key presses to a pane whether or not it holds an agent.
+func (c *Client) PaneKeys(pane string, keys ...string) error {
+	return c.call(nil, append([]string{"pane", "send-keys", pane}, keys...)...)
+}
+
+// PaneRead returns a pane's recent output, agent or not.
+func (c *Client) PaneRead(pane string, lines int) (string, error) {
+	b, err := c.Run("pane", "read", pane, "--source", "recent-unwrapped", "--lines", fmt.Sprint(lines))
+	return string(b), err
+}
+
 func (c *Client) Prompt(target, text string) error {
 	return c.call(nil, "agent", "prompt", target, text)
 }

@@ -57,12 +57,20 @@ func Create(p *project.Project, l *ledger.Ledger, h *herdr.Client, s Spec) (*led
 		prof = p.Config.WorkerProfile()
 	}
 	pname, pr := p.Config.Resolve(prof)
+	if err := pr.Validate(); err != nil {
+		return nil, fmt.Errorf("profile %s: %w", pname, err)
+	}
+	if pr.Wrapped() { // fail before making worktrees or a pane
+		if _, err := WrappedArgv(pr.Wrapper, pr.Harness, pr.Args); err != nil {
+			return nil, fmt.Errorf("profile %s: %w", pname, err)
+		}
+	}
 
 	dir := p.WorkstreamDir(s.Name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	m := &ledger.Meta{Name: s.Name, Kind: t.Name, Profile: pname, Harness: pr.Harness, Args: pr.Args,
+	m := &ledger.Meta{Name: s.Name, Kind: t.Name, Profile: pname, Harness: pr.Harness, Args: pr.Args, Wrapper: pr.Wrapper,
 		Goal: s.Goal, Ticket: s.Ticket, Repos: s.Repos, Cwd: p.Root, Created: time.Now()}
 
 	// Code-changing types are isolated in worktrees; the rest run at the project root.
@@ -156,6 +164,9 @@ func launch(p *project.Project, l *ledger.Ledger, h *herdr.Client, m *ledger.Met
 // dialog (e.g. Claude's folder-trust prompt) the kickoff is parked in a file and the watcher
 // delivers it once the agent is idle; the dialog itself surfaces as a blocked event.
 func startAndKickoff(p *project.Project, l *ledger.Ledger, h *herdr.Client, m *ledger.Meta, prompt string) error {
+	if m.Wrapped() {
+		return startWrapped(p, l, h, m, prompt) // never `agent start`: that runs the bare harness
+	}
 	err := h.StartAgent(space.AgentName(p, m.Name), m.Harness, m.PaneID, m.Args)
 	if err == nil {
 		err = h.Prompt(m.PaneID, prompt)
@@ -176,7 +187,12 @@ func Restart(p *project.Project, l *ledger.Ledger, h *herdr.Client, m *ledger.Me
 	// Reuse the old pane only if it is still this workstream's; a pane taken by something
 	// else (the orchestrator, once) is left alone and the worker gets a new one.
 	if pane, err := space.WorkerPane(p, h, m); err == nil && pane == m.PaneID {
-		return startAndKickoff(p, l, h, m, prompt)
+		// A wrapped worker is typed into its shell, so the pane must be free. Anything still
+		// running there (a natively resumed bare harness, a stuck wrapper) loses the pane.
+		if !m.Wrapped() || paneAtPrompt(h, pane) {
+			return startAndKickoff(p, l, h, m, prompt)
+		}
+		_ = h.ClosePane(pane)
 	}
 	return launch(p, l, h, m, false, prompt)
 }
