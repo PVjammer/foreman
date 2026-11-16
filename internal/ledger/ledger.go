@@ -40,11 +40,53 @@ type Meta struct {
 	TabID       string     `json:"tab_id,omitempty"`
 	PaneID      string     `json:"pane_id"`
 	// Phase is "" while working, "closeout" once asked to draft its closeout, "applying"
-	// after the user approved it.
+	// after the user approved it, and "landing" from ready-to-land on (see Land).
 	Phase    string     `json:"phase,omitempty"`
 	Closed   bool       `json:"closed"`
 	Created  time.Time  `json:"created"`
 	ClosedAt *time.Time `json:"closed_at,omitempty"`
+	// Landing is set at creation when the project has landing enabled (and --no-landing
+	// wasn't given). Without it the workstream closes out as before.
+	Landing bool       `json:"landing,omitempty"`
+	Land    *LandState `json:"land,omitempty"`
+}
+
+// LandState tracks a landing workstream from ready to landed. Owner: CLI and the watcher's
+// landing steps (like the closeout finalizer).
+type LandState struct {
+	// State: working | ready | in-review | parked | unmerged | landed
+	State          string     `json:"state"`
+	ReadyAt        *time.Time `json:"ready_at,omitempty"`
+	LandedAt       *time.Time `json:"landed_at,omitempty"`
+	Nudged         bool       `json:"nudged,omitempty"`
+	FollowupsFiled bool       `json:"followups_filed,omitempty"`
+	PRs            []PRRef    `json:"prs,omitempty"`
+	Merged         []string   `json:"merged,omitempty"` // repos fast-forwarded locally
+	LastError      string     `json:"last_error,omitempty"`
+}
+
+// PRRef is a pull/merge request foreman opened for one repo of a workstream.
+type PRRef struct {
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"` // remote branch name
+	ID     string `json:"id"`
+	URL    string `json:"url"`
+	State  string `json:"state"` // open | merged | closed
+	SHA    string `json:"sha,omitempty"`
+}
+
+// Proposal is a follow-up drafted by a worker and filed by foreman. proposals.jsonl is
+// append-only; a later line with the same ID updates its status.
+type Proposal struct {
+	ID     string    `json:"id"`
+	Time   time.Time `json:"time"`
+	From   string    `json:"from"` // source workstream
+	Title  string    `json:"title"`
+	Goal   string    `json:"goal,omitempty"`
+	Type   string    `json:"type,omitempty"`
+	Mode   string    `json:"mode,omitempty"` // interactive | autonomous (suggested; chosen at start)
+	Status string    `json:"status"`         // queued | start | dropped | started
+	Note   string    `json:"note,omitempty"`
 }
 
 // Status is the live state as last observed. Owner: watcher.
@@ -68,7 +110,8 @@ type Event struct {
 	Summary string    `json:"summary,omitempty"`
 }
 
-// Item kinds: blocked | question | closeout | done | stale | exited | turn
+// Item kinds: blocked | question | closeout | done | stale | exited | turn, and for landing:
+// land (ready to land) | unmerged (PR closed without merging) | landed
 type Item struct {
 	ID      string    `json:"id"`
 	Time    time.Time `json:"time"`
@@ -321,7 +364,7 @@ func (l *Ledger) Pending() []Item {
 		}
 	}
 	// blocked and questions first, then newest
-	rank := map[string]int{"blocked": 0, "question": 1, "closeout": 2, "exited": 3, "done": 4, "stale": 5, "turn": 6}
+	rank := map[string]int{"blocked": 0, "question": 1, "land": 2, "closeout": 2, "unmerged": 2, "exited": 3, "done": 4, "landed": 4, "stale": 5, "turn": 6}
 	sort.Slice(out, func(i, j int) bool {
 		if rank[out[i].Kind] != rank[out[j].Kind] {
 			return rank[out[i].Kind] < rank[out[j].Kind]
@@ -343,4 +386,28 @@ func (l *Ledger) AddBacklog(text, ws string) error {
 	}
 	_, err = f.WriteString("- [ ] " + time.Now().Format("2006-01-02") + " " + text + src + "\n")
 	return err
+}
+
+func (l *Ledger) AddProposal(pr Proposal) error {
+	if pr.Time.IsZero() {
+		pr.Time = time.Now()
+	}
+	return appendJSON(l.P.Path("proposals.jsonl"), pr)
+}
+
+// Proposals returns the latest version of each proposal, oldest first.
+func (l *Ledger) Proposals() []Proposal {
+	latest := map[string]Proposal{}
+	var order []string
+	for _, pr := range readLines[Proposal](l.P.Path("proposals.jsonl")) {
+		if _, ok := latest[pr.ID]; !ok {
+			order = append(order, pr.ID)
+		}
+		latest[pr.ID] = pr
+	}
+	out := make([]Proposal, 0, len(order))
+	for _, id := range order {
+		out = append(out, latest[id])
+	}
+	return out
 }

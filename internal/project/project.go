@@ -105,6 +105,71 @@ type Config struct {
 		MaxTurns  int `toml:"max_turns,omitempty"`
 		MaxOpen   int `toml:"max_open,omitempty"`
 	} `toml:"hygiene"`
+
+	// Landing is opt-in: without enabled = true, workstreams close out as before (D5).
+	Landing Landing `toml:"landing,omitempty"`
+
+	// Forges holds API access per forge host (github.com, gitlab.example.com). It merges by
+	// host across layers, so a token command saved globally serves every project.
+	Forges map[string]Forge `toml:"forges,omitempty"`
+}
+
+// Landing configures how finished workstreams land (see docs/design.md, D11).
+type Landing struct {
+	Enabled bool `toml:"enabled,omitempty"`
+	// NudgeHours: one reminder when ready-to-land work sits this long (0 = never).
+	NudgeHours int `toml:"nudge_hours,omitempty"`
+	// PollMinutes: how often the watcher checks open PRs/MRs.
+	PollMinutes int `toml:"poll_minutes,omitempty"`
+	// Repos maps a repo path relative to the project root ("." for the root) to its policy.
+	Repos map[string]LandingRepo `toml:"repos,omitempty"`
+}
+
+// LandingRepo is one repo's landing policy.
+type LandingRepo struct {
+	Mode   string `toml:"mode,omitempty"`   // pr (alias mr): push and open a PR/MR | ff: local fast-forward
+	Base   string `toml:"base,omitempty"`   // target branch (default main)
+	Remote string `toml:"remote,omitempty"` // pr: the remote to push to (your fork, for fork workflows)
+	Gate   string `toml:"gate,omitempty"`   // ff: command foreman runs in the worktree before merging
+	// pr settings
+	Forge     string `toml:"forge,omitempty"`      // host, a key of [forges]
+	Project   string `toml:"project,omitempty"`    // where the PR/MR opens: owner/repo (upstream, for forks)
+	HeadOwner string `toml:"head_owner,omitempty"` // forks (GitHub): owner of the pushed branch
+	Branch    string `toml:"branch,omitempty"`     // remote branch template: {name}, {ticket}; default fm/{name}
+	Draft     bool   `toml:"draft,omitempty"`
+}
+
+// PR reports whether the repo lands through a pull/merge request.
+func (r LandingRepo) PR() bool { return r.Mode == "pr" || r.Mode == "mr" }
+
+// Forge is API access to one forge host.
+type Forge struct {
+	Kind     string   `toml:"kind,omitempty"`      // github | gitlab
+	API      string   `toml:"api,omitempty"`       // API base URL
+	TokenCmd []string `toml:"token_cmd,omitempty"` // preferred: prints the token
+	TokenEnv string   `toml:"token_env,omitempty"` // fallback: environment variable name
+}
+
+// LandingFor returns the landing policy for a repo, with defaults filled in, and whether
+// landing applies to it at all.
+func (c *Config) LandingFor(repo string) (LandingRepo, bool) {
+	if !c.Landing.Enabled {
+		return LandingRepo{}, false
+	}
+	r, ok := c.Landing.Repos[repo]
+	if !ok || (r.Mode != "ff" && !r.PR()) {
+		return LandingRepo{}, false
+	}
+	if r.Base == "" {
+		r.Base = "main"
+	}
+	if r.Remote == "" {
+		r.Remote = "origin"
+	}
+	if r.Branch == "" {
+		r.Branch = "fm/{name}"
+	}
+	return r, true
 }
 
 func (c *Config) StopOnExit() bool { return c.UI.StopOnExit == nil || *c.UI.StopOnExit }
@@ -147,6 +212,8 @@ func Defaults() Config {
 	c.Hygiene.StaleDays = 3
 	c.Hygiene.MaxTurns = 40
 	c.Hygiene.MaxOpen = 8
+	c.Landing.NudgeHours = 4
+	c.Landing.PollMinutes = 10
 	return c
 }
 
@@ -294,12 +361,20 @@ func layer(c *Config, path string) error {
 	} else if err != nil {
 		return err
 	}
-	base := c.Profiles
-	c.Profiles = nil
+	base, forges := c.Profiles, c.Forges
+	c.Profiles, c.Forges = nil, nil
 	if err := toml.Unmarshal(b, c); err != nil {
-		c.Profiles = base
+		c.Profiles, c.Forges = base, forges
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
+	mf := map[string]Forge{}
+	for k, v := range forges {
+		mf[k] = v
+	}
+	for k, v := range c.Forges {
+		mf[k] = v
+	}
+	c.Forges = mf
 	merged := map[string]Profile{}
 	for k, v := range base {
 		merged[k] = v
