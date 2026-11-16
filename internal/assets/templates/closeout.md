@@ -18,7 +18,7 @@ Comments or state changes to propose (tracker: {{.Tracker}}, see .foreman/tracke
 One line each, with a suggested workstream type (feature, bug, research, spike, poc, deploy).
 
 ## Branches and worktrees
-Each branch: committed or not, ready to merge or not, and anything uncommitted.
+Each branch: committed or not, ready to merge or not, and anything uncommitted. Nobody merges for you at closeout, so say exactly what the user should merge, into what, and in which order.
 {{with .T.Phase "closeout"}}
 For this type ({{$.T.Name}}):
 {{.}}

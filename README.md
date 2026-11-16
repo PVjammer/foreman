@@ -17,6 +17,7 @@ Built on [herdr](https://herdr.dev) (terminal multiplexer for coding agents) wit
 | **Profile** | A named harness + args with a "use for" note, like `pi-small` for lookups and `claude` for features. The orchestrator picks one per task. |
 | **Brief / report** | What crosses between orchestrator and worker. The brief (`brief.md`) goes in; the worker writes `report.md` with `status: done`, `needs-input` or `failed`. |
 | **Closeout** | `foreman ws finish`: the worker drafts `closeout.md` (final report, doc updates, tracker updates, follow-ups). You approve it in the inbox, the worker applies it, and foreman closes the session, removes the worktrees (branches stay) and archives the workstream. |
+| **Landing** (optional) | How workstreams end in projects that turn it on: the worker prepares its branch and a packet, then exits; you press Land once; foreman fast-forwards (personal) or pushes and opens a PR/MR on GitHub or GitLab, and archives the workstream when the forge says merged. See [docs/landing.md](docs/landing.md). |
 | **Docs folder** | Where closeouts fold knowledge in (`foreman-docs/` by default). Committed with the project, kept local (git-excluded), or stored outside it, chosen at `foreman init`. |
 | **Ledger** | `.foreman/`: per-workstream `meta.json`, `status.json`, `report.md`, `closeout.md`, plus append-only `events.jsonl`, `inbox.jsonl` and `acks.jsonl`. Closed workstreams move to `archive/`. One writer per file, so no locks. |
 | **Watcher** | One background process per open project. Woken by foreman's herdr plugin on every agent state change (with a slow fallback poll), it writes a local-model summary into the sidebar, delivers events according to the mode, drives closeout, and nudges about stale workstreams. The plugin's hooks start it and restart it. |
@@ -107,6 +108,9 @@ mode = "commit"             # commit | local | external
 stale_days = 3              # suggest closing out after this long...
 max_turns = 40              # ...or this many turns
 max_open = 8                # warn past this many open workstreams
+
+[landing]                   # optional; `foreman landing setup` writes it (docs/landing.md)
+enabled = false
 ```
 
 Behaviour lives in text you can edit: `.foreman/ORCHESTRATOR.md`, `.foreman/tracker.md`, and types (`foreman types copy feature` copies one into `.foreman/types/` to customize; `--as datadog` makes a new type, `--global` puts it in `~/.config/foreman/types/` for every project).
@@ -119,6 +123,9 @@ foreman down                         close this project's space; state stays, `u
 foreman ws new <name> --goal "…" [--type feature] [--profile pi-small] [--repos a,b] [--ticket KEY]
 foreman ws finish <name>             close out: worker drafts closeout.md for approval
 foreman ws approve <name> [--note …] worker applies it; foreman closes and archives
+foreman ws land <name> [--start 1] [--drop 2]   landing projects: fast-forward, or push + open a PR/MR
+foreman ws keep <name> "…" · ws park <name> · ws ready <name>
+foreman landing setup | status | poll   · foreman proposals [start|drop|started <id>]
 foreman ws list [--all] | show | peek | send | keys | link | close | resume | focus
 foreman inbox [--list]               popup TUI (bound to prefix+i) or plain list
 foreman next                         jump to the workstream that most needs you (prefix+shift+i)
@@ -135,5 +142,7 @@ foreman init · setup-herdr · doctor · watch
 `scripts/scenario.sh setup [dir]` builds a toy two-repo project (pi on a local model for orchestrator and workers). Run it twice with different dirs and `NAME=` to get two projects side by side. Then `foreman up` in one, and `scripts/scenario.sh start` from another terminal. One workstream finishes, one has an ambiguous goal, and one uses Claude so you hit a dialog. Try `foreman ws finish` on a finished one to see closeout.
 
 To test without touching your own herdr or foreman setup, point `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME` at a scratch directory: herdr and foreman both follow them, so you get a separate herdr (default session included) and a separate project registry.
+
+`scripts/landing-scenario.sh` runs landing end to end (fast-forward, GitHub PR and fork, self-hosted GitLab MR) against local bare repos and a fake forge, with herdr stubbed out; see [docs/landing.md](docs/landing.md#trying-it).
 
 See [docs/design.md](docs/design.md) for the reasoning, decisions, findings and open questions.

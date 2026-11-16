@@ -5,7 +5,7 @@
 When the goal is done:
 
 1. **Rebase and test.** Rebase each branch onto its base ({{range $i, $p := .Plan}}{{if $i}}, {{end}}`{{$p.BaseRef}}`{{end}}) if it has moved, resolve conflicts, and run the tests. If you can't fetch, rebase onto what you have; foreman checks again at Land.
-2. **Commit everything.** Nothing may be left uncommitted in your worktrees.{{if eq .DocsMode "commit"}} Doc updates for `{{.Docs}}` go **on your branch** as commits, so they're reviewed with the code.{{else}} Repo docs (README, docs/) go on your branch as commits. Updates for the project docs folder `{{.Docs}}` (outside the repo) go in `{{.OutDir}}/docs.patch` instead: a unified diff with paths relative to that folder (`--- a/page.md` / `+++ b/page.md`, `/dev/null` for new files). foreman applies it once the work has landed. Only durable knowledge: decisions and why, how things work, gotchas.{{end}}
+2. **Commit everything.** Nothing may be left uncommitted in your worktrees.{{if eq .DocsMode "commit"}} Doc updates for `{{.Docs}}` go **on your branch** as commits, so they're reviewed with the code.{{else}} Repo docs (README, docs/) go on your branch as commits. Updates for the project docs folder `{{.Docs}}` (not committed with the code in this project) go in `{{.OutDir}}/docs.patch` instead: a unified diff with paths relative to that folder (`--- a/page.md` / `+++ b/page.md`, `/dev/null` for new files). foreman applies it once the work has landed. Only durable knowledge: decisions and why, how things work, gotchas.{{end}}
 3. **Write `{{.OutDir}}/landing.md`**, exactly this shape (it becomes the pull request):
 
    ```markdown

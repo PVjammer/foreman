@@ -56,7 +56,9 @@ The watcher bootstraps once per herdr server lifetime. It recognizes a new lifet
 
 The watcher exits when its project's workspace closes (`foreman down`) or the server goes away. When herdr reopens, the plugin's startup hook starts watchers for every registered project with an open space; its event hooks wake a watcher on every agent state change, or start one if none is running.
 
-Closeout: `ws finish` → the worker writes `closeout.md` (`status: proposed`) → the watcher posts it to the inbox → `ws approve` (or `a` in the inbox) → the worker applies it and sets `status: applied` → the watcher closes the workstream: removes worktrees (only caches may be left behind; real changes block it), closes the pane, archives the folder, clears its inbox items.
+Landing (opt-in, D11): the worker prepares a packet and reports done → the watcher marks it ready, ends its session, posts one inbox item → Land: foreman fast-forwards, or pushes and opens a PR/MR → the watcher polls the forge and archives once merged. See [landing.md](landing.md).
+
+Closeout (projects without landing): `ws finish` → the worker writes `closeout.md` (`status: proposed`) → the watcher posts it to the inbox → `ws approve` (or `a` in the inbox) → the worker applies it and sets `status: applied` → the watcher closes the workstream: removes worktrees (only caches may be left behind; real changes block it), closes the pane, archives the folder, clears its inbox items.
 
 ## Findings from the first scenario run (2026-10-28)
 
@@ -100,6 +102,8 @@ Made after the first scenario run. Each one is listed with the options we passed
 - **Chosen:** `foreman ws finish <name>` sends the worker its type's closeout prompt. The worker writes `closeout.md`: final report, proposed doc edits (with a target file for each), tracker updates and follow-ups. It shows up in the inbox; on approval **the same worker applies the edits** and exits. Then foreman closes the pane, removes the worktrees (branches are kept) and moves the workstream to `.foreman/archive/`, where the digest still sees it. The watcher suggests closeout or a split for old or long workstreams.
 - **Alternatives:** the orchestrator applies the edits (it has less context and more of its own to protect); no fold-in (the first prototype's `ws close`).
 
+*Amended by D11: projects that turn landing on end workstreams by landing instead; this closeout stays the default.*
+
 ### D6. A docs folder per project, location chosen at init
 
 - **Chosen:** `[docs] dir` (default `foreman-docs`) and `[docs] mode`:
@@ -131,6 +135,35 @@ Made after the first scenario run. Each one is listed with the options we passed
 ### D10. Hotkey to switch to the orchestrator (2026-10-29)
 
 - **Chosen:** a key that focuses the current project's orchestrator pane. Pressed again, it returns to where you were. Separate from the key that floats the orchestrator.
+
+### D11. Workstreams end by landing, opt-in (2026-11-16)
+
+**Problem.** Closeout took four or five separate prompts (suggest finish → finish → approve → merge by hand → turn follow-ups into work), and merging wasn't one of them. Each step took about a minute, but done workstreams waited hours to days between them (the 13 AI-Projects reviews: about 2 days from done to finish; agentbox-foreman-mode: 7 hours), finished branches lingered (fm/harness-wrapper), and done workers kept long sessions alive.
+
+**Chosen:** a workstream ends when its work **lands**; the session ends when the work is **ready**. Details in [landing.md](landing.md).
+
+- **The worker prepares, then exits.** Its brief says: rebase, test, commit (doc edits on the branch, so they're reviewed), write `landing.md` (the PR text), draft follow-ups (`followups.jsonl`), docs-folder edits outside the repo as `docs.patch`. On `done` + a complete packet the watcher marks it **ready**, ends the session and posts **one** inbox item.
+- **One decision:** Land / Keep working / Park / Close / Diff, with start / queue / drop (and a mode) per follow-up.
+- **foreman does the mechanics** (thin host): checks every repo first, then fast-forwards (personal projects) or pushes with the user's git credentials and opens a PR/MR via the forge's REST API (GitHub, GitLab; no gh/glab needed). Workers never get push access or tokens.
+- **Landed = the forge says merged** (polled; squash merges count; never git ancestry). In review the workstream is open, idle and never nudged, for days if need be. Closed unmerged → inbox: keep working, park or close; never silent.
+- **Problems go back to a worker** on the same branch with the error: conflicts, a branch that can't fast-forward, a failing gate, uncommitted work. Keep working is the same with the user's note; the next Land updates the same open PR.
+- **Follow-ups are filed by foreman** at Land into `proposals.jsonl` (append-only, one mechanism for interactive and autonomous work). Started ones go to the orchestrator, which writes the brief; queued ones wait for the user.
+- **Opt-in and never enforced.** `foreman init` asks (default no); `foreman landing setup` changes it; `ws new --no-landing` opts one workstream out; projects without it keep D5's closeout unchanged. Forge problems are warnings in `doctor` and never block `ws close`.
+- **Set up at onboarding:** forge, project, fork layout, base branch and gate are detected from the remotes; mode, branch template, draft and a token command per forge host are asked; the token is checked at once.
+
+**Answers to the open questions** (user, 2026-11-04 → 11-16):
+1. *Merge target:* per repo, chosen at onboarding: `pr` for work (GitLab MRs, self-hosted) and open-source (GitHub PRs, often from forks) repos, `ff` for personal ones. No silent default.
+2. *Who asks:* the inbox (with a toast), plus a one-line notice to the orchestrator. The worker's session has ended, so its pane doesn't ask. herdr can't open a popup programmatically.
+3. *Landing without a press:* no. Opening a PR is visible to colleagues and maintainers. A per-type `auto_open = "draft"` could come later.
+4. *Keep working:* a run on the same workstream and branch with the user's note (e.g. relayed review comments). New scope becomes a follow-up.
+5. *Park:* open, idle, branch and PR kept, no nudges. *Close:* abandon and archive (the PR is left alone; foreman says it's still open).
+6. *Follow-up format:* `followups.jsonl`, `{title, goal, type, mode}`, parsed as untrusted input. Filed at Land, not at merge.
+7. *Queues:* `proposals.jsonl` is the follow-up queue; `backlog.md` stays for free-text notes.
+8. *Token storage:* a command per forge host, in the project config or, if the user chooses at onboarding, the global config.
+
+**Alternatives considered:** A, the worker stays alive and asks in its pane (one decision, but the session lives until you answer); C, a batch landing queue (the inbox already behaves like one); D, the orchestrator drives landing in conversation (it would do workstream work, against the 10-30 incident's rule); E, land automatically when gates pass (unreviewed code on main; maybe later per type, docs-only); F, PR-only (needs a forge; personal projects don't); G, just auto-send the closeout prompt and merge on approve (cheapest, but keeps sessions alive and follow-ups loose).
+
+**Not built yet:** merging through the forge API, GitLab MRs from forks (config fields reserved), reading PR comments automatically, CI status in the ready item, enforcing landing order for stacked branches (Land fails on conflicts instead), updating a PR's title/body when the packet changes, autonomous and remote workers (the remote-agents design; the packet and proposals queue are shaped for them).
 
 ## Findings from the second build (2026-10-29)
 
@@ -237,7 +270,7 @@ On the real AI-Projects run, `foreman ws finish review-parked` delivered the clo
 
 1. **Which candidate feels right?** That's the point of the prototype. Try each on a real day: `foreman mode notifier|inbox|relay`.
 2. **Should the orchestrator resume or rehydrate?** Native resume brings back its full transcript, and bootstrap also nudges it to re-read the digest. Starting it fresh from the ledger every time would avoid bloat but loses conversational continuity.
-3. **Merge flow.** Who merges finished worktree branches: you, the orchestrator after a review workstream, or the worker? Closeout now reports each branch's state, but merging is still yours. A `review` type that ends in a merge is a natural custom type to try.
+3. ~~**Merge flow.**~~ Answered by D11 (landing): foreman merges (ff) or opens the PR/MR and watches it. Without landing, merging is still yours.
 4. **Toast noise.** herdr's built-in state toasts and foreman's summarized toasts both fire in `delivery = "herdr"` mode. We need to see whether that's too much.
 5. **Deploy guardrails.** The `deploy` type relies on the brief telling the worker to check in. Hard enforcement (hooks, agent-lockdown) is out of scope for now.
 6. **Personal-assistant overlap.** Pinned messages, forking from a message, and Jira integration beyond instructions probably belong in the PA (`projects/personal-assistant`). foreman should stay a project tool.

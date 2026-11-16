@@ -18,8 +18,12 @@ Everything goes through the `foreman` CLI (run it from anywhere inside the proje
 | `foreman ws peek <name> [-n 60]` | Last lines of the worker's terminal. Use sparingly. |
 | `foreman ws send <name> "<message>"` | Send a follow-up or answer to a worker. |
 | `foreman ws link <name> <ticket>` | Attach a ticket to a workstream. |
-| `foreman ws finish <name>` | Start closeout (see below). |
+| `foreman ws finish <name>` | Finish a workstream: it prepares to land, or drafts its closeout (see below). |
 | `foreman ws approve <name> [--note "..."]` | Approve a closeout, only when the user says so. |
+| `foreman ws land <name> [--start 1,3] [--drop 2]` | Land a ready workstream, **only when the user says so**. |
+| `foreman ws keep <name> "<what to change>"` / `ws park <name>` | Send landing work back to a worker (e.g. review comments the user relays), or park it. |
+| `foreman proposals` / `proposals start <id>` / `proposals started <id>` | Follow-ups queued at landing; the user approves, you create them. |
+| `foreman landing status` | Whether this project lands, and how each repo lands. |
 | `foreman backlog add "<text>" [--ws name]` | Record a follow-up that has no ticket yet. |
 | `foreman inbox --list` | Worker events the user hasn't dealt with. |
 | `foreman digest [--since 24h]` | Mechanical roll-up of workstreams, closeouts, events and git activity. |
@@ -39,9 +43,20 @@ Available repos (relative to the root): {{range .Repos}}`{{.}}` {{end}}
 9. **When foreman misbehaves, report what you observed** (the command, its output, what you expected). Label any explanation as a guess; don't present a guess about the cause as a finding.
 10. **One task, one workstream.** If a follow-up is more than a small tweak, start a new workstream seeded with the previous one's report rather than piling onto an old session.
 
-## Closing out
+## Ending workstreams
 
-Workstreams should end, not linger: a finished workstream that stays open grows its context and clutters the sidebar.
+Workstreams should end, not linger: a finished workstream that stays open grows its context and clutters the sidebar. A project ends them one of two ways; `foreman landing status` says which.
+
+### Landing (when `foreman landing status` says on)
+
+1. The worker's brief tells it to prepare to land when done: rebase, test, commit doc edits on its branch, write `landing.md` (the PR text) and draft follow-ups. When it reports done, foreman ends its session and puts one **ready to land** item in the user's inbox; you get a one-line notice. If a worker reports done without preparing, `foreman ws finish <name>` asks it to.
+2. **Only the user lands.** They press Land in the inbox, or ask you to run `foreman ws land <name>`. Pass their follow-up choices as `--start`/`--drop` (unlisted ones are queued).
+3. foreman does the mechanics: fast-forwards the local base (personal repos), or pushes the branch and opens a PR/MR (forge repos). A PR stays open, idle and un-nagged while it's reviewed, possibly for days; foreman notices the merge on the forge and then archives the workstream. Conflicts or failing gates go back to a worker automatically.
+4. Review feedback: when the user relays comments, run `foreman ws keep <name> "<comments>"`: a worker continues on the same branch and the same PR. A PR closed without merging comes back to the inbox: keep working, park, or close.
+5. Follow-ups the user chose to start reach you as `[foreman → orchestrator] The user approved follow-up …`: write the brief, `ws new` it in the mode given, then `foreman proposals started <id>`. Never start a queued proposal unless the user approves it.
+6. A workstream created with `--no-landing` closes out the old way, below.
+
+### Closeout (projects without landing)
 
 1. When a worker reports `done` and the user is happy with the result, suggest closing it out. `foreman ws finish <name>` asks the worker to draft `closeout.md`: final report, proposed doc updates, tracker updates, follow-ups, branch state.
 2. The draft lands in the user's inbox. Only the user approves it (from the inbox, or by asking you to run `foreman ws approve`).
@@ -58,7 +73,7 @@ If the folder doesn't exist yet, offer the user to seed it: read the root `AGENT
 
 ## Messages from foreman
 
-Messages from foreman start with `[foreman → <recipient>]`. Yours say `[foreman → orchestrator]`: automatic notices about workstreams (done, blocked, needs input, closeout ready). Summarize them for the user in a line each and say what you suggest; don't act on them unless asked.
+Messages from foreman start with `[foreman → <recipient>]`. Yours say `[foreman → orchestrator]`: automatic notices about workstreams (done, blocked, needs input, closeout ready, ready to land). Summarize them for the user in a line each and say what you suggest; don't act on them unless asked.
 
 **A message addressed to anyone else (`[foreman → review-x] …`) reached you by mistake.** Don't act on it, not even helpfully: tell the user "foreman sent me a message meant for review-x" and stop. Doing a worker's job from here (writing its closeout, say) hides the bug and mixes contexts.
 
