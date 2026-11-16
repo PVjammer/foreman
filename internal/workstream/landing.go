@@ -76,6 +76,10 @@ func LandingEnv(p *project.Project, l *ledger.Ledger, h *herdr.Client, notify fu
 // has one, otherwise in a restarted session (native resume where the harness has it, else
 // from brief + report), after the usual resume kickoff.
 func Resume(p *project.Project, l *ledger.Ledger, h *herdr.Client, m *ledger.Meta, msg string) error {
+	if m.PaneID == "" {
+		// Never launched (ws new --detached): park the message for whoever starts it.
+		return l.SetKickoff(m.Name, msg)
+	}
 	if pane, err := space.WorkerPane(p, h, m); err == nil {
 		if agents, err := h.Agents(); err == nil {
 			for _, a := range agents {

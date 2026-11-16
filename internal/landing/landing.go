@@ -516,7 +516,7 @@ func (e *Env) Poll(m *ledger.Meta) error {
 		st.State = "unmerged"
 		_ = e.L.SaveMeta(m)
 		_ = e.L.AddEvent(ledger.Event{WS: m.Name, Kind: "unmerged"})
-		e.notify(m, "unmerged", "PR closed without merging: park it (p), keep working (k) or close it (c)")
+		e.notify(m, "unmerged", "PR closed without merging: keep working, park or close it (inbox W / P / C, or `foreman ws keep|park|close`)")
 	default:
 		_ = e.L.SaveMeta(m)
 	}

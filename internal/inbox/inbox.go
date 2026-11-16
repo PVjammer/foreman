@@ -3,6 +3,7 @@
 package inbox
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/PVjammer/foreman/internal/herdr"
+	"github.com/PVjammer/foreman/internal/landing"
 	"github.com/PVjammer/foreman/internal/ledger"
 	"github.com/PVjammer/foreman/internal/project"
 	"github.com/PVjammer/foreman/internal/space"
@@ -25,7 +27,7 @@ var (
 	selStyle   = lipgloss.NewStyle().Reverse(true)
 	dimStyle   = lipgloss.NewStyle().Faint(true)
 	boxStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	icons      = map[string]string{"blocked": "⛔", "question": "❓", "closeout": "📝", "done": "✅", "stale": "🧹", "turn": "·", "exited": "✖"}
+	icons      = map[string]string{"blocked": "⛔", "question": "❓", "closeout": "📝", "done": "✅", "stale": "🧹", "turn": "·", "exited": "✖", "land": "🛬", "unmerged": "↩", "landed": "🛬"}
 )
 
 type model struct {
@@ -39,6 +41,8 @@ type model struct {
 	replyTo  string
 	keysMode bool
 	noteMode bool
+	keepMode bool                              // the input is a "keep working" note
+	choices  map[string]map[int]landing.Choice // follow-up choices per landing workstream
 	flash    string
 	w, ht    int
 }
@@ -51,7 +55,7 @@ func Run(p *project.Project) error {
 	ti := textinput.New()
 	ti.Placeholder = "reply to the worker…"
 	ti.CharLimit = 4000
-	m := model{p: p, l: ledger.New(p), h: space.Client(p), input: ti}
+	m := model{p: p, l: ledger.New(p), h: space.Client(p), input: ti, choices: map[string]map[int]landing.Choice{}}
 	m.items = m.l.Pending()
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
@@ -90,6 +94,9 @@ func (m model) loadPreview() tea.Cmd {
 	it := m.selected()
 	if it == nil {
 		return nil
+	}
+	if it.Kind == "land" || it.Kind == "unmerged" {
+		return m.landingPreview(*it)
 	}
 	return func() tea.Msg {
 		var b strings.Builder
@@ -174,7 +181,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.replyTo != "" {
 			switch msg.String() {
 			case "esc":
-				m.replyTo, m.keysMode, m.noteMode = "", false, false
+				m.replyTo, m.keysMode, m.noteMode, m.keepMode = "", false, false, false
 				m.input.Blur()
 				return m, nil
 			case "enter":
@@ -182,6 +189,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.replyTo = ""
 				m.input.Blur()
 				m.input.SetValue("")
+				if m.keepMode {
+					m.keepMode = false
+					if text == "" {
+						return m, nil
+					}
+					return m, m.act(func(it ledger.Item) (string, error) {
+						meta, err := m.l.Meta(it.WS)
+						if err != nil {
+							return "", err
+						}
+						return "sent " + it.WS + " back to work", m.env().Keep(meta, text)
+					}, true)
+				}
 				if m.noteMode {
 					m.noteMode = false
 					return m, m.act(func(it ledger.Item) (string, error) {
@@ -284,6 +304,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}, true)
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 			digit := msg.String()
+			if it := m.selected(); it != nil && it.Kind == "land" {
+				// On a ready-to-land item, digits cycle that follow-up's choice.
+				n := int(digit[0] - '1')
+				ch := m.choices[it.WS]
+				if ch == nil {
+					ch = map[int]landing.Choice{}
+					m.choices[it.WS] = ch
+				}
+				ch[n] = nextChoice(ch[n])
+				return m, m.loadPreview()
+			}
 			return m, m.act(func(it ledger.Item) (string, error) {
 				return "sent " + digit + " to " + it.WS, m.withTarget(it.WS, func(pn string) error { return m.h.SendKeys(pn, digit) })
 			}, true)
@@ -311,6 +342,54 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				text := fmt.Sprintf("[foreman → orchestrator] The user handed you this: workstream %s is %s — %s. Look at it (`foreman ws show %s`) and tell me what you suggest.", it.WS, it.Kind, it.Summary, it.WS)
 				return "handed to the orchestrator", m.h.Prompt(orch, text)
 			}, true)
+		case "L":
+			if it := m.selected(); it != nil && it.Kind == "land" {
+				ch := m.choices[it.WS]
+				return m, m.act(func(it ledger.Item) (string, error) {
+					meta, err := m.l.Meta(it.WS)
+					if err != nil {
+						return "", err
+					}
+					out, err := m.env().Land(meta, ch)
+					if errors.Is(err, landing.ErrHandedBack) {
+						return "not landed, sent back to the worker: " + strings.TrimPrefix(err.Error(), landing.ErrHandedBack.Error()+": "), nil
+					}
+					return "landed " + it.WS + ": " + out, err
+				}, false)
+			}
+		case "P":
+			if it := m.selected(); it != nil && (it.Kind == "land" || it.Kind == "unmerged") {
+				return m, m.act(func(it ledger.Item) (string, error) {
+					meta, err := m.l.Meta(it.WS)
+					if err != nil {
+						return "", err
+					}
+					return "parked " + it.WS + " (`foreman ws land " + it.WS + "` later)", m.env().Park(meta)
+				}, true)
+			}
+		case "W":
+			if it := m.selected(); it != nil && (it.Kind == "land" || it.Kind == "unmerged") {
+				m.replyTo, m.keepMode = it.WS, true
+				m.input.Placeholder = "what to change (e.g. paste the review comments)"
+				m.input.Focus()
+				return m, textinput.Blink
+			}
+		case "C":
+			if it := m.selected(); it != nil && (it.Kind == "land" || it.Kind == "unmerged") {
+				return m, m.act(func(it ledger.Item) (string, error) {
+					meta, err := m.l.Meta(it.WS)
+					if err != nil {
+						return "", err
+					}
+					return "closed " + it.WS + " without landing (branch kept)", workstream.Close(m.p, m.l, m.h, meta, false)
+				}, true)
+			}
+		case "g":
+			if it := m.selected(); it != nil && (it.Kind == "land" || it.Kind == "unmerged") {
+				if c := m.diffCmd(it.WS); c != nil {
+					return m, tea.ExecProcess(c, func(err error) tea.Msg { return doneMsg{""} })
+				}
+			}
 		case "d":
 			return m, m.act(func(it ledger.Item) (string, error) { return "dismissed " + it.WS, nil }, true)
 		case "D":
@@ -343,6 +422,19 @@ func (m model) View() string {
 	right := lipgloss.NewStyle().Width(rightW).MaxHeight(max(5, m.ht-6)).Render(m.preview)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
 
+	if it := m.selected(); it != nil && (it.Kind == "land" || it.Kind == "unmerged") {
+		help := "L land · 1-9 cycle a follow-up (queue → start → start autonomous → drop) · W keep working · P park · C close without landing · g diff · d dismiss · ↑↓ move · q close"
+		if it.Kind == "unmerged" {
+			help = "W keep working (same branch) · P park · C close · g diff · d dismiss · ↑↓ move · q close"
+		}
+		footer := dimStyle.Width(max(20, m.w-2)).Render(help)
+		if m.replyTo != "" {
+			footer = "keep working on " + m.replyTo + ": " + m.input.View()
+		} else if m.flash != "" {
+			footer = m.flash + "\n" + footer
+		}
+		return body + "\n\n" + footer
+	}
 	help := "↑↓ move · enter answer live (blocked/questions; ctrl+b q returns) or open · o open session · v dock · r reply · y enter on highlighted · 1-9 pick option · s send keys · x esc · f close out · a approve closeout · h hand to orchestrator · d dismiss · D clear · q close"
 	footer := dimStyle.Width(max(20, m.w-2)).Render(help)
 	if m.replyTo != "" {
@@ -398,4 +490,107 @@ func List(p *project.Project) string {
 		fmt.Fprintf(&b, "%s %-8s %-20s %s (%s)\n", icons[it.Kind], it.Kind, it.WS, it.Summary, ago(it.Time))
 	}
 	return b.String()
+}
+
+func (m model) env() *landing.Env { return workstream.LandingEnv(m.p, m.l, m.h, nil) }
+
+// nextChoice cycles a follow-up: queue → start → start autonomous → drop → queue.
+func nextChoice(c landing.Choice) landing.Choice {
+	switch {
+	case c.Action == "" || c.Action == "queue":
+		return landing.Choice{Action: "start", Mode: "interactive"}
+	case c.Action == "start" && c.Mode != "autonomous":
+		return landing.Choice{Action: "start", Mode: "autonomous"}
+	case c.Action == "start":
+		return landing.Choice{Action: "drop"}
+	}
+	return landing.Choice{Action: "queue"}
+}
+
+func choiceLabel(c landing.Choice) string {
+	switch c.Action {
+	case "start":
+		return "start (" + c.Mode + ")"
+	case "drop":
+		return "drop"
+	}
+	return "queue"
+}
+
+// landingPreview shows the Land decision: what lands where, the tests, follow-ups with the
+// current choices, and the diff stat.
+func (m model) landingPreview(it ledger.Item) tea.Cmd {
+	choices := m.choices[it.WS]
+	return func() tea.Msg {
+		var b strings.Builder
+		meta, err := m.l.Meta(it.WS)
+		if err != nil {
+			return previewMsg{it.WS, err.Error()}
+		}
+		pk, err := landing.ReadPacket(m.l, it.WS)
+		if err != nil || pk == nil {
+			return previewMsg{it.WS, fmt.Sprintf("landing packet: %v", err)}
+		}
+		fmt.Fprintf(&b, "%s\n%s\n\n", titleStyle.Render(pk.Title), pk.Summary)
+		b.WriteString(titleStyle.Render("Lands as") + "\n")
+		for _, wt := range meta.Worktrees {
+			pol, ok := m.p.Config.LandingFor(wt.Repo)
+			switch {
+			case !ok:
+				fmt.Fprintf(&b, "  %s: no landing policy (`foreman landing setup`)\n", wt.Repo)
+			case pol.PR():
+				fmt.Fprintf(&b, "  %s: push %s, PR into %s on %s/%s\n", wt.Repo, wt.Branch, pol.Base, pol.Forge, pol.Project)
+			default:
+				fmt.Fprintf(&b, "  %s: fast-forward local %s\n", wt.Repo, pol.Base)
+			}
+			if stat := diffStat(wt, pol.Base, pol.PR(), pol.Upstream); stat != "" {
+				fmt.Fprintf(&b, "%s\n", dimStyle.Render(stat))
+			}
+		}
+		if meta.Land != nil {
+			for _, pr := range meta.Land.PRs {
+				fmt.Fprintf(&b, "  %s: %s (%s)\n", pr.Repo, pr.URL, pr.State)
+			}
+		}
+		if pk.Tests != "" {
+			fmt.Fprintf(&b, "\n%s\n%s\n", titleStyle.Render("Tests"), pk.Tests)
+		}
+		if len(pk.Followups) > 0 && it.Kind == "land" {
+			fmt.Fprintf(&b, "\n%s\n", titleStyle.Render("Follow-ups (press the number to change)"))
+			for i, f := range pk.Followups {
+				fmt.Fprintf(&b, "  %d [%s] %s (%s)\n", i+1, choiceLabel(choices[i]), f.Title, f.Type)
+			}
+		}
+		if len(pk.DocsPatch) > 0 {
+			fmt.Fprintf(&b, "\n%s applied to %s once landed\n", titleStyle.Render("Docs patch"), m.p.DocsDir())
+		}
+		return previewMsg{it.WS, b.String()}
+	}
+}
+
+func diffStat(wt ledger.Worktree, base string, pr bool, upstream string) string {
+	ref := base
+	if pr {
+		ref = upstream + "/" + base
+	}
+	out, err := exec.Command("git", "-C", wt.Path, "diff", "--shortstat", ref+"..."+wt.Branch).Output()
+	if err != nil {
+		out, _ = exec.Command("git", "-C", wt.Path, "diff", "--shortstat", base+"..."+wt.Branch).Output()
+	}
+	return "    " + strings.TrimSpace(string(out))
+}
+
+// diffCmd opens the workstream's diff against its base in git's pager.
+func (m model) diffCmd(ws string) *exec.Cmd {
+	meta, err := m.l.Meta(ws)
+	if err != nil || len(meta.Worktrees) == 0 {
+		return nil
+	}
+	wt := meta.Worktrees[0]
+	pol, _ := m.p.Config.LandingFor(wt.Repo)
+	base := pol.Base
+	if base == "" {
+		base = "main"
+	}
+	return exec.Command("git", "-C", wt.Path, "diff", base+"..."+wt.Branch)
 }

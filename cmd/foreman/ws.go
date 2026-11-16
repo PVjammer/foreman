@@ -65,6 +65,10 @@ func wsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if s.Detached {
+				fmt.Printf("created %s (%s) in %s without an agent\nbrief: %s\n", m.Name, m.Kind, m.Cwd, e.l.BriefPath(m.Name))
+				return nil
+			}
 			fmt.Printf("started %s (%s, %s → %s) in %s\nbrief: %s\n", m.Name, m.Kind, m.Profile, m.Harness, m.Cwd, e.l.BriefPath(m.Name))
 			_ = e.h.Notify(e.p.Config.Name+" · "+m.Name+"  ▶ started", firstLineOf(m.Goal), "none")
 			return nil
@@ -77,6 +81,8 @@ func wsCmd() *cobra.Command {
 	newC.Flags().StringVar(&repos, "repos", "", "comma-separated repos for worktrees (types with worktrees)")
 	newC.Flags().BoolVar(&s.Focus, "focus", false, "switch to the new workstream")
 	newC.Flags().BoolVar(&s.NoLanding, "no-landing", false, "close out with `ws finish` → approve even if the project uses landing")
+	newC.Flags().BoolVar(&s.Detached, "detached", false, "create it without starting an agent (scripts and tests)")
+	_ = newC.Flags().MarkHidden("detached")
 	newC.Flags().StringVar(&kind, "kind", "", "alias for --type")
 	newC.Flags().StringVar(&harness, "harness", "", "alias for --profile")
 	_ = newC.Flags().MarkHidden("kind")

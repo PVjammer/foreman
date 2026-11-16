@@ -265,7 +265,8 @@ type repoFacts struct {
 }
 
 func remoteURL(dir, name string) string {
-	out, err := exec.Command("git", "-C", dir, "remote", "get-url", name).Output()
+	// The URL as configured (not get-url, which applies insteadOf rewrites): it names the forge.
+	out, err := exec.Command("git", "-C", dir, "config", "--get", "remote."+name+".url").Output()
 	if err != nil {
 		return ""
 	}

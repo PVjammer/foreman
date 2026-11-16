@@ -28,6 +28,7 @@ type Spec struct {
 	Repos                             []string
 	Focus                             bool
 	NoLanding                         bool // close out as before even if the project lands
+	Detached                          bool // create worktrees and brief, don't start an agent (scripts, tests)
 }
 
 func Create(p *project.Project, l *ledger.Ledger, h *herdr.Client, s Spec) (*ledger.Meta, error) {
@@ -80,6 +81,10 @@ func Create(p *project.Project, l *ledger.Ledger, h *herdr.Client, s Spec) (*led
 	}
 	if err := writeBrief(p, l, m, t); err != nil {
 		return nil, err
+	}
+	if s.Detached {
+		_ = l.AddEvent(ledger.Event{WS: m.Name, Kind: "created", Summary: m.Goal})
+		return m, l.SaveMeta(m)
 	}
 	if err := launch(p, l, h, m, s.Focus, kickoff(p, l, m, false)); err != nil {
 		return m, err
