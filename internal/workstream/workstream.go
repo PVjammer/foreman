@@ -27,6 +27,7 @@ type Spec struct {
 	Name, Type, Profile, Goal, Ticket string
 	Repos                             []string
 	Focus                             bool
+	NoLanding                         bool // close out as before even if the project lands
 }
 
 func Create(p *project.Project, l *ledger.Ledger, h *herdr.Client, s Spec) (*ledger.Meta, error) {
@@ -63,7 +64,8 @@ func Create(p *project.Project, l *ledger.Ledger, h *herdr.Client, s Spec) (*led
 		return nil, err
 	}
 	m := &ledger.Meta{Name: s.Name, Kind: t.Name, Profile: pname, Harness: pr.Harness, Args: pr.Args,
-		Goal: s.Goal, Ticket: s.Ticket, Repos: s.Repos, Cwd: p.Root, Created: time.Now()}
+		Goal: s.Goal, Ticket: s.Ticket, Repos: s.Repos, Cwd: p.Root, Created: time.Now(),
+		Landing: p.Config.Landing.Enabled && !s.NoLanding}
 
 	// Code-changing types are isolated in worktrees; the rest run at the project root.
 	if t.Worktrees && len(s.Repos) > 0 {
@@ -116,6 +118,7 @@ func render(name string, data any) (string, error) {
 func writeBrief(p *project.Project, l *ledger.Ledger, m *ledger.Meta, t *types.Type) error {
 	s, err := render("brief.md", map[string]any{
 		"M": m, "T": t, "Root": p.Root, "Report": l.ReportPath(m.Name), "Docs": p.DocsDir(),
+		"Landing": landingData(p, l, m),
 	})
 	if err != nil {
 		return err
@@ -173,6 +176,9 @@ func Restart(p *project.Project, l *ledger.Ledger, h *herdr.Client, m *ledger.Me
 	if m.Phase == "closeout" || m.Phase == "applying" {
 		prompt += " You were in the middle of closing out: read " + l.CloseoutPath(m.Name) + " and continue from there."
 	}
+	if m.Phase == "landing" {
+		return nil // ready to land, in review or parked: there's no worker session to bring back
+	}
 	// Reuse the old pane only if it is still this workstream's; a pane taken by something
 	// else (the orchestrator, once) is left alone and the worker gets a new one.
 	if pane, err := space.WorkerPane(p, h, m); err == nil && pane == m.PaneID {
@@ -191,7 +197,24 @@ func Finish(p *project.Project, l *ledger.Ledger, h *herdr.Client, m *ledger.Met
 	if err != nil {
 		return err
 	}
-	prompt, err := render("closeout.md", map[string]any{
+	var prompt string
+	if landingData(p, l, m) != nil {
+		// Landing workstreams prepare their packet instead; the watcher sees it when the
+		// report says done, and the user lands from the inbox.
+		if prompt, err = landingPrompt(p, l, m); err != nil {
+			return err
+		}
+		pane, err := space.WorkerPane(p, h, m)
+		if err != nil {
+			return fmt.Errorf("can't ask %s to prepare landing: %w", m.Name, err)
+		}
+		if err := h.Prompt(pane, prompt); err != nil {
+			return fmt.Errorf("send landing prompt (is the worker running? `foreman ws resume %s`): %w", m.Name, err)
+		}
+		_ = l.AddEvent(ledger.Event{WS: m.Name, Kind: "finishing", Summary: "prepare landing"})
+		return nil
+	}
+	prompt, err = render("closeout.md", map[string]any{
 		"M": m, "T": t, "Closeout": l.CloseoutPath(m.Name), "Docs": p.DocsDir(), "Tracker": p.Config.Tracker.Kind,
 	})
 	if err != nil {

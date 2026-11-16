@@ -130,7 +130,9 @@ type LandingRepo struct {
 	Mode   string `toml:"mode,omitempty"`   // pr (alias mr): push and open a PR/MR | ff: local fast-forward
 	Base   string `toml:"base,omitempty"`   // target branch (default main)
 	Remote string `toml:"remote,omitempty"` // pr: the remote to push to (your fork, for fork workflows)
-	Gate   string `toml:"gate,omitempty"`   // ff: command foreman runs in the worktree before merging
+	// Upstream is the remote holding the base branch (forks: "upstream"); default Remote.
+	Upstream string `toml:"upstream,omitempty"`
+	Gate     string `toml:"gate,omitempty"` // ff: command foreman runs in the worktree before merging
 	// pr settings
 	Forge     string `toml:"forge,omitempty"`      // host, a key of [forges]
 	Project   string `toml:"project,omitempty"`    // where the PR/MR opens: owner/repo (upstream, for forks)
@@ -166,10 +168,34 @@ func (c *Config) LandingFor(repo string) (LandingRepo, bool) {
 	if r.Remote == "" {
 		r.Remote = "origin"
 	}
+	if r.Upstream == "" {
+		r.Upstream = r.Remote
+	}
 	if r.Branch == "" {
 		r.Branch = "fm/{name}"
 	}
 	return r, true
+}
+
+// SetGlobal changes one key in the global config (~/.config/foreman/config.toml). Only
+// onboarding uses it, and only when the user chose to save a forge's token command there.
+func SetGlobal(keys []string, value any) error {
+	path := GlobalConfigPath()
+	doc := map[string]any{}
+	if b, err := os.ReadFile(path); err == nil {
+		if err := toml.Unmarshal(b, &doc); err != nil {
+			return err
+		}
+	}
+	setPath(doc, keys, value)
+	b, err := toml.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
 }
 
 func (c *Config) StopOnExit() bool { return c.UI.StopOnExit == nil || *c.UI.StopOnExit }
@@ -389,6 +415,12 @@ func layer(c *Config, path string) error {
 // SetLocal changes one key in the project's own config file, leaving the global layer and
 // the project's other settings alone. key is dotted, e.g. "ui.mode".
 func (p *Project) SetLocal(key string, value any) error {
+	return p.SetLocalKeys(strings.Split(key, "."), value)
+}
+
+// SetLocalKeys is SetLocal with the key path given part by part, for keys that contain dots
+// themselves (forge hosts such as "github.com").
+func (p *Project) SetLocalKeys(keys []string, value any) error {
 	path := p.Path("config.toml")
 	doc := map[string]any{}
 	if b, err := os.ReadFile(path); err == nil {
@@ -396,7 +428,7 @@ func (p *Project) SetLocal(key string, value any) error {
 			return err
 		}
 	}
-	setPath(doc, strings.Split(key, "."), value)
+	setPath(doc, keys, value)
 	b, err := toml.Marshal(doc)
 	if err != nil {
 		return err

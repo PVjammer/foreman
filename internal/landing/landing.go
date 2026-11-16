@@ -211,13 +211,13 @@ func (e *Env) Land(m *ledger.Meta, choices map[int]Choice) (string, error) {
 		if s.branch, err = RemoteBranch(pol.Branch, m); err != nil {
 			return "", err
 		}
-		if _, err := git(s.repo, "fetch", "--quiet", pol.Remote, pol.Base); err != nil {
-			return "", fmt.Errorf("fetch %s %s in %s: %v", pol.Remote, pol.Base, wt.Repo, err)
+		if _, err := git(s.repo, "fetch", "--quiet", pol.Upstream, pol.Base); err != nil {
+			return "", fmt.Errorf("fetch %s %s in %s: %v", pol.Upstream, pol.Base, wt.Repo, err)
 		}
 		if bad, files, err := conflicts(s.repo, "FETCH_HEAD", wt.Branch); err != nil {
 			return "", err
 		} else if bad {
-			return e.handback(m, fmt.Sprintf("%s conflicts with %s/%s (%s). foreman fetched it: rebase onto %s/%s, resolve the conflicts, re-run the tests, commit.", wt.Branch, pol.Remote, pol.Base, files, pol.Remote, pol.Base))
+			return e.handback(m, fmt.Sprintf("%s conflicts with %s/%s (%s). foreman fetched it: rebase onto %s/%s, resolve the conflicts, re-run the tests, commit.", wt.Branch, pol.Upstream, pol.Base, files, pol.Upstream, pol.Base))
 		}
 		steps = append(steps, s)
 	}
@@ -614,4 +614,3 @@ func PollDue(p *project.Project, last time.Time) bool {
 	}
 	return time.Since(last) >= time.Duration(mins)*time.Minute
 }
-

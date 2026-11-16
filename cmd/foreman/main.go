@@ -29,7 +29,7 @@ func main() {
 	root.PersistentFlags().BoolVar(&active, "active", false, "use the project of herdr's focused workspace (for keybindings)")
 	root.AddCommand(initCmd(), upCmd(), downCmd(), watchCmd(), statusBarCmd(), hookCmd(),
 		modeCmd(), layoutCmd(), trackerCmd(), profilesCmd(), typesCmd(), setupHerdrCmd(), doctorCmd(),
-		wsCmd(), backlogCmd(), inboxCmd(), nextCmd(), digestCmd(),
+		wsCmd(), backlogCmd(), proposalsCmd(), landingCmd(), inboxCmd(), nextCmd(), digestCmd(),
 		orchCmd(), viewCmd(), dockCmd(), undockCmd(), scratchCmd(), requestCmd(),
 		installCmd(), setupClaudeCmd())
 	if err := root.Execute(); err != nil {

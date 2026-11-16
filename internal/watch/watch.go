@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/PVjammer/foreman/internal/herdr"
+	"github.com/PVjammer/foreman/internal/landing"
 	"github.com/PVjammer/foreman/internal/ledger"
 	"github.com/PVjammer/foreman/internal/project"
 	"github.com/PVjammer/foreman/internal/space"
@@ -64,10 +65,11 @@ type Watcher struct {
 	verify     map[string]sent   // pane → held prompt just delivered, to confirm it was submitted
 	lastHyg    time.Time
 	warnedOpen bool
+	lastPoll   map[string]time.Time // landing: when each in-review workstream's PRs were checked
 }
 
 func New(p *project.Project, l *log.Logger) *Watcher {
-	return &Watcher{P: p, L: ledger.New(p), H: space.Client(p), Log: l, seen: map[string]seen{}, inboxN: -1, parked: map[string]string{}, verify: map[string]sent{}}
+	return &Watcher{P: p, L: ledger.New(p), H: space.Client(p), Log: l, seen: map[string]seen{}, inboxN: -1, parked: map[string]string{}, verify: map[string]sent{}, lastPoll: map[string]time.Time{}}
 }
 
 // Lock takes the project's watcher lock. ok=false means another watcher holds it.
@@ -219,6 +221,7 @@ func (w *Watcher) Run(ctx context.Context, bootstrap bool) {
 		w.tick(false)
 		w.flushRelay()
 		w.closeouts()
+		w.landings()
 		w.hygiene()
 		w.updateInboxCount()
 	}
@@ -302,7 +305,8 @@ func (w *Watcher) tick(initial bool) {
 		if !ok {
 			// A worker vanishing because its whole space closed (`foreman down`, quitting
 			// herdr) is not news; only report exits from a space that is still open.
-			if known && prev.present && !initial && w.findSpace() {
+			// Nor is a landing worker ending its session once its packet is ready.
+			if known && prev.present && !initial && m.Phase != "landing" && w.findSpace() {
 				go w.emit(m, "exited", false)
 			}
 			w.seen[m.Name] = seen{present: false, reportMod: prev.reportMod}
@@ -369,9 +373,20 @@ var labels = map[string]string{
 	"stale":    "🧹 close out?",
 	"turn":     "· turn ended",
 	"exited":   "✖ exited",
+	"land":     "🛬 ready to land",
+	"unmerged": "↩ PR closed unmerged",
+	"landed":   "🛬 landed",
 }
 
 func (w *Watcher) emit(m *ledger.Meta, kind string, focused bool) {
+	notReady := ""
+	if kind == "done" && landing.Applies(w.P, m) && m.Phase == "" {
+		ok, why := w.landingEnv().CheckReady(m)
+		if ok {
+			return // CheckReady posted the one "ready to land" item
+		}
+		notReady = why
+	}
 	report, rstatus, _ := w.L.Report(m.Name)
 	screen := ""
 	if kind != "exited" {
@@ -385,7 +400,43 @@ func (w *Watcher) emit(m *ledger.Meta, kind string, focused bool) {
 		}
 		sum = fallbackSummary(kind, report)
 	}
+	if notReady != "" {
+		sum += " (not ready to land: " + notReady + "; `foreman ws finish " + m.Name + "` asks it to prepare)"
+	}
 	w.post(m, kind, sum, rstatus, focused)
+}
+
+func (w *Watcher) landingEnv() *landing.Env {
+	return workstream.LandingEnv(w.P, w.L, w.H, func(m *ledger.Meta, kind, sum string) { w.post(m, kind, sum, "", false) })
+}
+
+// landings drives landing workstreams: polls open PRs (merged → finalize, closed →
+// ask), and nudges once when ready-to-land work has waited too long. Workstreams in review
+// or parked are never nudged.
+func (w *Watcher) landings() {
+	if !w.P.Config.Landing.Enabled {
+		return
+	}
+	var env *landing.Env
+	for _, m := range w.L.List(false) {
+		if m.Phase != "landing" || m.Land == nil {
+			continue
+		}
+		switch {
+		case m.Land.State == "in-review" && landing.PollDue(w.P, w.lastPoll[m.Name]):
+			w.lastPoll[m.Name] = time.Now()
+			if env == nil {
+				env = w.landingEnv()
+			}
+			if err := env.Poll(m); err != nil {
+				w.Log.Printf("%s: checking PRs: %v", m.Name, err)
+			}
+		case landing.Due(w.P, m):
+			m.Land.Nudged = true
+			_ = w.L.SaveMeta(m)
+			_ = w.H.Notify(w.P.Config.Name+" · "+m.Name+"  "+labels["land"], fmt.Sprintf("still waiting to land (%dh): land, keep working or park it in the inbox (%s)", w.P.Config.Landing.NudgeHours, w.P.Config.Keys.Inbox), "request")
+		}
+	}
 }
 
 // post records an event and delivers it according to the UI mode.
@@ -408,8 +459,13 @@ func (w *Watcher) post(m *ledger.Meta, kind, sum, rstatus string, focused bool) 
 	}
 	title := w.P.Config.Name + " · " + m.Name + "  " + labels[kind]
 	sound := "done"
-	if kind == "blocked" || kind == "question" || kind == "closeout" {
+	if kind == "blocked" || kind == "question" || kind == "closeout" || kind == "land" || kind == "unmerged" {
 		sound = "request"
+	}
+	// Ready-to-land also gets a one-line notice in the orchestrator's conversation (relay mode
+	// sends one below anyway). The user decides in the inbox.
+	if kind == "land" && w.P.Config.UI.Mode != "relay" && w.orchPane != "" {
+		_ = views.Send(w.P, w.H, w.orchPane, fmt.Sprintf("[foreman → orchestrator] %s is %s. The user lands it from the inbox (or asks you to run `foreman ws land %s`); don't land it on your own.", m.Name, sum, m.Name))
 	}
 	switch w.P.Config.UI.Mode {
 	case "notifier":
@@ -432,7 +488,7 @@ func (w *Watcher) post(m *ledger.Meta, kind, sum, rstatus string, focused bool) 
 // marks it applied, closes the workstream: worktrees removed, pane closed, folder archived.
 func (w *Watcher) closeouts() {
 	for _, m := range w.L.List(false) {
-		if m.Phase == "" {
+		if m.Phase == "" || m.Phase == "landing" {
 			continue
 		}
 		body, status, mod := w.L.Closeout(m.Name)

@@ -27,7 +27,10 @@
 - Stay inside the goal. If you find other problems, list them under *Follow-ups*; don't fix them.
 - If the goal is ambiguous or you need a decision, don't guess: write the report with `status: needs-input` and stop.
 
-## Report
+{{if .Landing}}## Landing
+
+{{template "landing-steps" .Landing}}
+{{end}}## Report
 
 Write your report to `{{.Report}}` when you finish or need input, replacing any earlier version. Use exactly this shape:
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/PVjammer/foreman/internal/digest"
 	"github.com/PVjammer/foreman/internal/inbox"
+	"github.com/PVjammer/foreman/internal/landing"
 	"github.com/PVjammer/foreman/internal/ledger"
 	"github.com/PVjammer/foreman/internal/space"
 	"github.com/PVjammer/foreman/internal/workstream"
@@ -75,6 +76,7 @@ func wsCmd() *cobra.Command {
 	newC.Flags().StringVar(&s.Ticket, "ticket", "", "tracker key")
 	newC.Flags().StringVar(&repos, "repos", "", "comma-separated repos for worktrees (types with worktrees)")
 	newC.Flags().BoolVar(&s.Focus, "focus", false, "switch to the new workstream")
+	newC.Flags().BoolVar(&s.NoLanding, "no-landing", false, "close out with `ws finish` → approve even if the project uses landing")
 	newC.Flags().StringVar(&kind, "kind", "", "alias for --type")
 	newC.Flags().StringVar(&harness, "harness", "", "alias for --profile")
 	_ = newC.Flags().MarkHidden("kind")
@@ -100,7 +102,9 @@ func wsCmd() *cobra.Command {
 			for _, m := range e.l.List(all) {
 				st := e.l.Status(m.Name)
 				state := or(live[m.PaneID], "—")
-				if m.Phase != "" {
+				if m.Phase == "landing" && m.Land != nil {
+					state = m.Land.State
+				} else if m.Phase != "" {
 					state += " (" + m.Phase + ")"
 				}
 				if m.Closed {
@@ -133,6 +137,7 @@ func wsCmd() *cobra.Command {
 			if co, cs, cmod := e.l.Closeout(m.Name); co != "" {
 				fmt.Printf("\n## Closeout (%s, %s)\n%s\n", cs, cmod.Format("01-02 15:04"), co)
 			}
+			landingShow(e, m)
 			return nil
 		}),
 	}
@@ -185,11 +190,15 @@ func wsCmd() *cobra.Command {
 
 	finishC := &cobra.Command{
 		Use:   "finish <name>",
-		Short: "Close out: the worker drafts its final report, doc updates and follow-ups for approval",
+		Short: "Finish: the worker prepares to land (landing projects) or drafts its closeout for approval",
 		Args:  cobra.ExactArgs(1),
 		RunE: wsRun(func(e *env, m *ledger.Meta, _ []string) error {
 			if err := workstream.Finish(e.p, e.l, e.h, m); err != nil {
 				return err
+			}
+			if landing.Applies(e.p, m) {
+				fmt.Printf("asked %s to prepare landing; the inbox asks you to land it when it's ready\n", m.Name)
+				return nil
 			}
 			fmt.Printf("asked %s to draft %s; it shows up in the inbox for approval\n", m.Name, e.l.CloseoutPath(m.Name))
 			return nil
@@ -213,7 +222,17 @@ func wsCmd() *cobra.Command {
 		Short: "Close a workstream now, without a closeout (removes worktrees, keeps branches, archives)",
 		Args:  cobra.ExactArgs(1),
 		RunE: wsRun(func(e *env, m *ledger.Meta, _ []string) error {
-			return workstream.Close(e.p, e.l, e.h, m, keepWT)
+			if err := workstream.Close(e.p, e.l, e.h, m, keepWT); err != nil {
+				return err
+			}
+			if m.Land != nil {
+				for _, pr := range m.Land.PRs {
+					if pr.State == "open" {
+						fmt.Printf("note: %s's PR is still open: %s (close it on the forge if it's abandoned)\n", m.Name, pr.URL)
+					}
+				}
+			}
+			return nil
 		}),
 	}
 	closeC.Flags().BoolVar(&keepWT, "keep-worktrees", false, "leave its git worktrees in place")
@@ -237,6 +256,7 @@ func wsCmd() *cobra.Command {
 	}
 
 	c.AddCommand(newC, listC, showC, peekC, sendC, keysC, linkC, finishC, approveC, closeC, resumeC, focusC)
+	c.AddCommand(landCmds()...)
 	return c
 }
 

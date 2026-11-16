@@ -60,6 +60,7 @@ func (a *asker) ask(q, def string, opts []string) string {
 func initCmd() *cobra.Command {
 	var name, orch, worker, scratch, tracker, mode, docsDir, docsMode string
 	var yes, force bool
+	var lf landingFlags
 	c := &cobra.Command{
 		Use:   "init",
 		Short: "Make the current directory a foreman project (asks a few questions on a terminal)",
@@ -123,11 +124,19 @@ func initCmd() *cobra.Command {
 			if existing != nil && len(existing.Config.Workers.Repos) > 0 {
 				repos = existing.Config.Workers.Repos
 			}
+			landingDoc, forges, err := landingSetup(a, flag, root, repos, lf, cur)
+			if err != nil {
+				return err
+			}
 			doc := map[string]any{
 				"name":    name,
 				"workers": map[string]any{"repos": repos},
 				"docs":    map[string]any{"dir": docsDir, "mode": docsMode},
 				"tracker": map[string]any{"kind": tracker},
+				"landing": landingDoc,
+			}
+			if len(forges["project"]) > 0 {
+				doc["forges"] = forges["project"]
 			}
 			if orch != g.Orchestrator.Profile {
 				doc["orchestrator"] = map[string]any{"profile": orch}
@@ -147,7 +156,7 @@ func initCmd() *cobra.Command {
 			if err := project.WriteFile(root, doc); err != nil {
 				return err
 			}
-			p, err := project.Load(root)
+			p, err = project.Load(root)
 			if err != nil {
 				return err
 			}
@@ -171,6 +180,9 @@ func initCmd() *cobra.Command {
 				_ = project.Exclude(root, "/"+project.Dir+"/")
 			}
 			if err := project.Register(name, root); err != nil {
+				return err
+			}
+			if err := saveForges(nil, map[string]map[string]any{"global": forges["global"]}); err != nil {
 				return err
 			}
 			if !exists(project.GlobalConfigPath()) {
@@ -199,6 +211,7 @@ func initCmd() *cobra.Command {
 	c.Flags().StringVar(&docsDir, "docs-dir", "", "docs folder name (default foreman-docs)")
 	c.Flags().StringVar(&docsMode, "docs-mode", "", "commit | local | external")
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "don't ask; use defaults for anything not given as a flag")
+	lf.register(c)
 	c.Flags().BoolVar(&force, "force", false, "re-run on an initialized project (regenerates ORCHESTRATOR.md and tracker.md)")
 	return c
 }
@@ -559,6 +572,13 @@ func doctorCmd() *cobra.Command {
 				ok(good, "summarizer model "+cfg.Summarizer.Model+" at "+cfg.Summarizer.URL)
 			}
 			ok(watch.Running(p), "watcher running for this project")
+			landingDoctor(p, func(good bool, msg string) {
+				if good {
+					ok(true, msg)
+				} else {
+					fmt.Println("!", msg, "(landing is optional; nothing else depends on it)")
+				}
+			})
 			dir, _ := os.UserConfigDir()
 			hc, _ := os.ReadFile(filepath.Join(dir, "herdr", "config.toml"))
 			ok(strings.Contains(string(hc), beginMark), "herdr config has foreman keybindings (`foreman setup-herdr`)")

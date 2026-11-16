@@ -243,7 +243,7 @@ func prRig(t *testing.T, fork bool) (*rig, *fake.Server, string) {
 		run(t, r.p.Root, "git", "init", "-q", "--bare", up)
 		run(t, r.p.Root, "git", "remote", "add", "upstream", up)
 		run(t, r.p.Root, "git", "push", "-q", "upstream", "main")
-		pol.Project, pol.HeadOwner = "upstream-org/rig", "nick"
+		pol.Project, pol.HeadOwner, pol.Upstream = "upstream-org/rig", "nick", "upstream"
 	}
 	r.p.Config.Landing.Repos["."] = pol
 	r.p.Config.Forges = map[string]project.Forge{"github.com": {Kind: "github", API: ts.URL, TokenCmd: []string{"echo", "tok"}}}
