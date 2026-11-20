@@ -15,6 +15,7 @@ Built on [herdr](https://herdr.dev) (terminal multiplexer for coding agents) wit
 | **Workstream** | One task, one worker agent, in its own tab (layout `tabs`) or as a zoomed pane in a shared `workstreams` tab (layout `panes`). Has a **type** and a **profile**. |
 | **Type** | What kind of work it is: `feature`, `bug`, `research`, `spike`, `poc`, `deploy`, or your own. A markdown file: frontmatter sets the mechanics (worktrees, read-only, when to check in, default profile), sections give the `start` / `work` / `closeout` instructions. |
 | **Profile** | A named harness + args with a "use for" note, like `pi-small` for lookups and `claude` for features. The orchestrator picks one per task. |
+| **Skills** | The orchestrator's procedures (start a workstream, status update, triage, closeout or landing, docs, troubleshooting) as [Agent Skills](docs/skills.md), installed into the project's `.claude/skills/` or `.agents/skills/`. They load on demand, and you can invoke them by name (`/ws-status`). |
 | **Brief / report** | What crosses between orchestrator and worker. The brief (`brief.md`) goes in; the worker writes `report.md` with `status: done`, `needs-input` or `failed`. |
 | **Closeout** | `foreman ws finish`: the worker drafts `closeout.md` (final report, doc updates, tracker updates, follow-ups). You approve it in the inbox, the worker applies it, and foreman closes the session, removes the worktrees (branches stay) and archives the workstream. |
 | **Landing** (optional) | How workstreams end in projects that turn it on: the worker prepares its branch and a packet, then exits; you press Land once; foreman fast-forwards (personal) or pushes and opens a PR/MR on GitHub or GitLab, and archives the workstream when the forge says merged. See [docs/landing.md](docs/landing.md). |
@@ -63,7 +64,7 @@ foreman up                           # opens herdr; quitting stops it, the next 
 
 Both setup steps merge into your existing files, keep a `.foreman-bak` backup, and can be previewed with `--print`. Claude reads its settings at startup, so restart any Claude sessions that were already running (in a pane: `/exit`, then `claude --continue`).
 
-`foreman init` detects repos (up to three levels deep), writes `.foreman/config.toml`, `ORCHESTRATOR.md` and `tracker.md`, and on first use a commented `~/.config/foreman/config.toml`. Pass flags (`--docs-mode local --tracker jira --yes`) to skip the questions.
+`foreman init` detects repos (up to three levels deep), writes `.foreman/config.toml`, `ORCHESTRATOR.md` and `tracker.md`, installs the [orchestrator skills](docs/skills.md) for the orchestrator's and scratch session's harnesses (`--no-skills` to skip), and on first use writes a commented `~/.config/foreman/config.toml`. Pass flags (`--docs-mode local --tracker jira --yes`) to skip the questions.
 
 `setup-herdr` merges into your existing herdr config: it keeps your toast `delivery` choice, skips tables you already define, validates the result with `herdr config check`, and leaves a `.foreman-bak` backup. It also generates and links foreman's herdr plugin, whose hooks start each project's watcher when herdr starts and wake it the moment an agent changes state. Keybindings come from `[keys]` and avoid herdr's own; `doctor` flags clashes.
 
@@ -113,14 +114,14 @@ max_open = 8                # warn past this many open workstreams
 enabled = false
 ```
 
-Behaviour lives in text you can edit: `.foreman/ORCHESTRATOR.md`, `.foreman/tracker.md`, and types (`foreman types copy feature` copies one into `.foreman/types/` to customize; `--as datadog` makes a new type, `--global` puts it in `~/.config/foreman/types/` for every project).
+Behaviour lives in text you can edit: `.foreman/ORCHESTRATOR.md`, `.foreman/tracker.md`, the installed skills (edits survive `foreman skills install`), and types (`foreman types copy feature` copies one into `.foreman/types/` to customize; `--as datadog` makes a new type, `--global` puts it in `~/.config/foreman/types/` for every project).
 
 ## Commands
 
 ```
 foreman up [--keep] [--no-attach]    open the project's space (starts herdr if needed)
 foreman down                         close this project's space; state stays, `up` brings it back
-foreman ws new <name> --goal "…" [--type feature] [--profile pi-small] [--repos a,b] [--ticket KEY]
+foreman ws new <name> --goal "…" [--type feature] [--profile pi-small] [--repos a,b] [--ticket KEY] [--dry-run]
 foreman ws finish <name>             close out: worker drafts closeout.md for approval
 foreman ws approve <name> [--note …] worker applies it; foreman closes and archives
 foreman ws land <name> [--start 1] [--drop 2]   landing projects: fast-forward, or push + open a PR/MR
@@ -131,6 +132,7 @@ foreman inbox [--list]               popup TUI (bound to prefix+i) or plain list
 foreman next                         jump to the workstream that most needs you (prefix+shift+i)
 foreman digest [--since 24h|7d]      roll-up the orchestrator turns into status updates
 foreman backlog add "…" [--ws name]
+foreman skills [list|install|show]   orchestrator skills (install: --harness claude|pi|opencode|all, --force)
 foreman types [show|copy] · foreman profiles
 foreman mode [notifier|inbox|relay] · foreman layout [tabs|panes] · foreman tracker [ledger|jira|linear]
 foreman orch · view <target> · dock [target] · undock <target> · request ["…"] · scratch clear
