@@ -1,7 +1,6 @@
 package workstream
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -21,11 +20,11 @@ func briefFor(t *testing.T, cfg project.Config, m *ledger.Meta) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeBrief(p, l, m, ty); err != nil {
+	b, err := renderBrief(p, l, m, ty)
+	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := os.ReadFile(l.BriefPath(m.Name))
-	return string(b)
+	return b
 }
 
 func TestBriefLandingSectionOnlyWhenEnabled(t *testing.T) {

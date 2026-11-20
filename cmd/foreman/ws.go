@@ -39,6 +39,7 @@ func wsCmd() *cobra.Command {
 
 	var s workstream.Spec
 	var repos, kind, harness string
+	var dryRun bool
 	newC := &cobra.Command{
 		Use:   "new <name>",
 		Short: "Start a workstream (worker agent + brief) in this project's space",
@@ -61,6 +62,21 @@ func wsCmd() *cobra.Command {
 			if repos != "" {
 				s.Repos = strings.Split(repos, ",")
 			}
+			if dryRun {
+				m, _, brief, err := workstream.Plan(e.p, e.l, s)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("would start %s (%s, %s → %s) in %s\n", m.Name, m.Kind, m.Profile, m.Harness, m.Cwd)
+				if m.Landing {
+					fmt.Println("  ends by landing (project uses landing; --no-landing to close out instead)")
+				}
+				for _, wt := range m.Worktrees {
+					fmt.Printf("  worktree %s → %s on branch %s\n", wt.Repo, wt.Path, wt.Branch)
+				}
+				fmt.Printf("nothing created (dry run). Brief:\n\n%s", brief)
+				return nil
+			}
 			m, err := workstream.Create(e.p, e.l, e.h, s)
 			if err != nil {
 				return err
@@ -80,6 +96,7 @@ func wsCmd() *cobra.Command {
 	newC.Flags().StringVar(&s.Ticket, "ticket", "", "tracker key")
 	newC.Flags().StringVar(&repos, "repos", "", "comma-separated repos for worktrees (types with worktrees)")
 	newC.Flags().BoolVar(&s.Focus, "focus", false, "switch to the new workstream")
+	newC.Flags().BoolVar(&dryRun, "dry-run", false, "print the resolved type, profile, worktrees and brief; create nothing")
 	newC.Flags().BoolVar(&s.NoLanding, "no-landing", false, "close out with `ws finish` → approve even if the project uses landing")
 	newC.Flags().BoolVar(&s.Detached, "detached", false, "create it without starting an agent (scripts and tests)")
 	_ = newC.Flags().MarkHidden("detached")

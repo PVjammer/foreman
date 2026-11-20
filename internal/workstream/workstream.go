@@ -31,24 +31,27 @@ type Spec struct {
 	Detached                          bool // create worktrees and brief, don't start an agent (scripts, tests)
 }
 
-func Create(p *project.Project, l *ledger.Ledger, h *herdr.Client, s Spec) (*ledger.Meta, error) {
+// Plan resolves a spec into the workstream it would start, without touching anything: name
+// checks, type, profile, landing, working directory and planned worktrees, plus the rendered
+// brief. `foreman ws new --dry-run` prints it; Create carries it out.
+func Plan(p *project.Project, l *ledger.Ledger, s Spec) (*ledger.Meta, *types.Type, string, error) {
 	if !nameRe.MatchString(s.Name) {
-		return nil, fmt.Errorf("name %q must match [a-z][a-z0-9_-]{0,31}", s.Name)
+		return nil, nil, "", fmt.Errorf("name %q must match [a-z][a-z0-9_-]{0,31}", s.Name)
 	}
 	for _, r := range space.Reserved {
 		if s.Name == r {
-			return nil, fmt.Errorf("%q is reserved", s.Name)
+			return nil, nil, "", fmt.Errorf("%q is reserved", s.Name)
 		}
 	}
 	if _, err := l.Meta(s.Name); err == nil {
-		return nil, fmt.Errorf("workstream %q already exists (closed ones live in .foreman/archive)", s.Name)
+		return nil, nil, "", fmt.Errorf("workstream %q already exists (closed ones live in .foreman/archive)", s.Name)
 	}
 	if s.Type == "" {
 		s.Type = p.Config.Workers.Type
 	}
 	t, err := types.Get(p, s.Type)
 	if err != nil {
-		return nil, err
+		return nil, nil, "", err
 	}
 	// Profile precedence: flag > type > project/global default.
 	prof := s.Profile
@@ -61,9 +64,6 @@ func Create(p *project.Project, l *ledger.Ledger, h *herdr.Client, s Spec) (*led
 	pname, pr := p.Config.Resolve(prof)
 
 	dir := p.WorkstreamDir(s.Name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
 	m := &ledger.Meta{Name: s.Name, Kind: t.Name, Profile: pname, Harness: pr.Harness, Args: pr.Args,
 		Goal: s.Goal, Ticket: s.Ticket, Repos: s.Repos, Cwd: p.Root, Created: time.Now(),
 		Landing: p.Config.Landing.Enabled && !s.NoLanding}
@@ -72,14 +72,34 @@ func Create(p *project.Project, l *ledger.Ledger, h *herdr.Client, s Spec) (*led
 	if t.Worktrees && len(s.Repos) > 0 {
 		m.Cwd = dir
 		for _, repo := range s.Repos {
-			wt, err := addWorktree(p.Root, repo, dir, s.Name)
+			wt, err := planWorktree(p.Root, repo, dir, s.Name)
 			if err != nil {
-				return nil, err
+				return nil, nil, "", err
 			}
 			m.Worktrees = append(m.Worktrees, wt)
 		}
 	}
-	if err := writeBrief(p, l, m, t); err != nil {
+	brief, err := renderBrief(p, l, m, t)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return m, t, brief, nil
+}
+
+func Create(p *project.Project, l *ledger.Ledger, h *herdr.Client, s Spec) (*ledger.Meta, error) {
+	m, _, brief, err := Plan(p, l, s)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(p.WorkstreamDir(m.Name), 0o755); err != nil {
+		return nil, err
+	}
+	for _, wt := range m.Worktrees {
+		if err := addWorktree(p.Root, wt); err != nil {
+			return nil, err
+		}
+	}
+	if err := os.WriteFile(l.BriefPath(m.Name), []byte(brief), 0o644); err != nil {
 		return nil, err
 	}
 	if s.Detached {
@@ -93,25 +113,28 @@ func Create(p *project.Project, l *ledger.Ledger, h *herdr.Client, s Spec) (*led
 	return m, nil
 }
 
-func addWorktree(root, repo, wsDir, name string) (ledger.Worktree, error) {
-	repoPath := filepath.Join(root, repo)
-	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+// planWorktree says where a repo's worktree for workstream name goes and on which branch.
+func planWorktree(root, repo, wsDir, name string) (ledger.Worktree, error) {
+	if _, err := os.Stat(filepath.Join(root, repo, ".git")); err != nil {
 		return ledger.Worktree{}, fmt.Errorf("%s is not a git repo", repo)
 	}
 	sub := repo
 	if repo == "." {
 		sub = "root"
 	}
-	path := filepath.Join(wsDir, sub)
-	branch := "fm/" + name
-	args := []string{"-C", repoPath, "worktree", "add", path, "-b", branch}
-	if exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", branch).Run() == nil {
-		args = []string{"-C", repoPath, "worktree", "add", path, branch}
+	return ledger.Worktree{Repo: repo, Path: filepath.Join(wsDir, sub), Branch: "fm/" + name}, nil
+}
+
+func addWorktree(root string, wt ledger.Worktree) error {
+	repoPath := filepath.Join(root, wt.Repo)
+	args := []string{"-C", repoPath, "worktree", "add", wt.Path, "-b", wt.Branch}
+	if exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", wt.Branch).Run() == nil {
+		args = []string{"-C", repoPath, "worktree", "add", wt.Path, wt.Branch}
 	}
 	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-		return ledger.Worktree{}, fmt.Errorf("git worktree add (%s): %s", repo, strings.TrimSpace(string(out)))
+		return fmt.Errorf("git worktree add (%s): %s", wt.Repo, strings.TrimSpace(string(out)))
 	}
-	return ledger.Worktree{Repo: repo, Path: path, Branch: branch}, nil
+	return nil
 }
 
 func render(name string, data any) (string, error) {
@@ -120,15 +143,11 @@ func render(name string, data any) (string, error) {
 	return buf.String(), err
 }
 
-func writeBrief(p *project.Project, l *ledger.Ledger, m *ledger.Meta, t *types.Type) error {
-	s, err := render("brief.md", map[string]any{
+func renderBrief(p *project.Project, l *ledger.Ledger, m *ledger.Meta, t *types.Type) (string, error) {
+	return render("brief.md", map[string]any{
 		"M": m, "T": t, "Root": p.Root, "Report": l.ReportPath(m.Name), "Docs": p.DocsDir(),
 		"Landing": landingData(p, l, m),
 	})
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(l.BriefPath(m.Name), []byte(s), 0o644)
 }
 
 func kickoff(p *project.Project, l *ledger.Ledger, m *ledger.Meta, resume bool) string {
