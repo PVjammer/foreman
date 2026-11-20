@@ -31,7 +31,7 @@ func main() {
 		modeCmd(), layoutCmd(), trackerCmd(), profilesCmd(), typesCmd(), setupHerdrCmd(), doctorCmd(),
 		wsCmd(), backlogCmd(), proposalsCmd(), landingCmd(), inboxCmd(), nextCmd(), digestCmd(),
 		orchCmd(), viewCmd(), dockCmd(), undockCmd(), scratchCmd(), requestCmd(),
-		installCmd(), setupClaudeCmd())
+		installCmd(), setupClaudeCmd(), skillsCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/PVjammer/foreman/internal/assets"
 	"github.com/PVjammer/foreman/internal/herdr"
 	"github.com/PVjammer/foreman/internal/project"
+	"github.com/PVjammer/foreman/internal/skills"
 	"github.com/PVjammer/foreman/internal/types"
 	"github.com/PVjammer/foreman/internal/watch"
 )
@@ -59,7 +61,7 @@ func (a *asker) ask(q, def string, opts []string) string {
 
 func initCmd() *cobra.Command {
 	var name, orch, worker, scratch, tracker, mode, docsDir, docsMode string
-	var yes, force bool
+	var yes, force, noSkills bool
 	var lf landingFlags
 	c := &cobra.Command{
 		Use:   "init",
@@ -185,6 +187,14 @@ func initCmd() *cobra.Command {
 			if err := saveForges(nil, map[string]map[string]any{"global": forges["global"]}); err != nil {
 				return err
 			}
+			if !noSkills {
+				if dirs, _ := skills.DirsFor(defaultHarnesses(&p.Config)); len(dirs) > 0 {
+					fmt.Println("installing orchestrator skills:")
+					if _, err := installSkills(p, dirs, false, false); err != nil {
+						fmt.Println("  skills:", err)
+					}
+				}
+			}
 			if !exists(project.GlobalConfigPath()) {
 				_ = os.MkdirAll(project.ConfigDir(), 0o755)
 				if err := os.WriteFile(project.GlobalConfigPath(), []byte(assets.File("global.toml")), 0o644); err == nil {
@@ -195,6 +205,9 @@ func initCmd() *cobra.Command {
 			fmt.Println("  .foreman/config.toml   this project's settings (on top of", project.GlobalConfigPath()+")")
 			fmt.Println("  .foreman/ORCHESTRATOR.md  how the orchestrator works; edit freely")
 			fmt.Println("  .foreman/types/        custom workstream types (`foreman types copy feature` to start from one)")
+			if !noSkills {
+				fmt.Println("  orchestrator skills    `foreman skills` lists them; `foreman skills install --harness …` for another harness")
+			}
 			if !exists(filepath.Join(root, "AGENTS.md")) && !exists(filepath.Join(root, "CLAUDE.md")) {
 				fmt.Println("  no AGENTS.md/CLAUDE.md at the root: add one so the orchestrator knows what this project is")
 			}
@@ -213,6 +226,7 @@ func initCmd() *cobra.Command {
 	c.Flags().BoolVarP(&yes, "yes", "y", false, "don't ask; use defaults for anything not given as a flag")
 	lf.register(c)
 	c.Flags().BoolVar(&force, "force", false, "re-run on an initialized project (regenerates ORCHESTRATOR.md and tracker.md)")
+	c.Flags().BoolVar(&noSkills, "no-skills", false, "don't install the orchestrator skills (`foreman skills install` later)")
 	return c
 }
 
@@ -579,6 +593,35 @@ func doctorCmd() *cobra.Command {
 					fmt.Println("!", msg, "(landing is optional; nothing else depends on it)")
 				}
 			})
+			dirs, unknown := skills.DirsFor(defaultHarnesses(&cfg))
+			for _, d := range dirs {
+				var bad, edited []string
+				for name, st := range skills.Status(p.Root, p.Path("skills.json"), d) {
+					switch st {
+					case skills.Modified:
+						edited = append(edited, name)
+					case skills.Current:
+					default:
+						bad = append(bad, name+" "+st)
+					}
+				}
+				sort.Strings(bad)
+				sort.Strings(edited)
+				msg := "orchestrator skills in " + d
+				if len(bad) > 0 {
+					msg += ": " + strings.Join(bad, ", ") + " (`foreman skills install`)"
+				}
+				ok(len(bad) == 0, msg)
+				if len(edited) > 0 {
+					fmt.Printf("  edited locally, kept on install: %s\n", strings.Join(edited, ", "))
+				}
+				if d == skills.Dirs["pi"] {
+					fmt.Println("  (pi loads project skills only once you trust the project; it asks on first start)")
+				}
+			}
+			for _, h := range unknown {
+				fmt.Printf("  orchestrator/scratch harness %s has no known skill dir; it can read skills with `foreman skills show <name>`\n", h)
+			}
 			dir, _ := os.UserConfigDir()
 			hc, _ := os.ReadFile(filepath.Join(dir, "herdr", "config.toml"))
 			ok(strings.Contains(string(hc), beginMark), "herdr config has foreman keybindings (`foreman setup-herdr`)")

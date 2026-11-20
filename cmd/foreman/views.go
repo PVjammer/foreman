@@ -208,7 +208,7 @@ func requestCmd() *cobra.Command {
 				return err
 			}
 			msg := "[foreman → orchestrator] Workstream request from the user:\n\n" + text + "\n\n" +
-				"Turn it into a workstream: write the goal like a ticket, pick the type, profile, repos and a short name, start it with `foreman ws new`, and tell me in one line what you started. Ask me first only if it's genuinely ambiguous."
+				"Turn it into a workstream with the ws-start skill: write the goal like a ticket, pick the type, profile, repos and a short name, start it with `foreman ws new`, and tell me in one line what you started. Ask me first only if it's genuinely ambiguous."
 			queued, err := views.SendOrQueue(e.p, e.h, o.Pane.PaneID, msg)
 			if err != nil {
 				return err

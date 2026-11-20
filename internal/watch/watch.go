@@ -672,7 +672,7 @@ func (w *Watcher) bootstrap(ctx context.Context) {
 	resumed := w.waitForAgent(ctx, pane, 12*time.Second)
 	docsNote := ""
 	if _, err := os.Stat(w.P.DocsDir()); err != nil {
-		docsNote = fmt.Sprintf(" The project docs folder (%s) doesn't exist yet: offer to seed it, as described under \"Project docs\" in ORCHESTRATOR.md.", w.P.DocsDir())
+		docsNote = fmt.Sprintf(" The project docs folder (%s) doesn't exist yet: offer to seed it (the project-docs skill; `foreman skills show project-docs` if you don't have it).", w.P.DocsDir())
 	}
 	if resumed {
 		w.Log.Printf("bootstrap: orchestrator resumed natively")
